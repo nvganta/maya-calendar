@@ -7,7 +7,7 @@ from fastapi import Request, HTTPException
 TIMESTAMP_TOLERANCE = 300  # 5 minutes
 
 
-def verify_maya_signature(body: str, client_id: str, signature: str, timestamp: str) -> bool:
+def verify_maya_signature(body: str, secret: str, signature: str, timestamp: str) -> bool:
     """Verify HMAC-SHA256 signature from Maya."""
     # Check timestamp freshness
     try:
@@ -21,7 +21,7 @@ def verify_maya_signature(body: str, client_id: str, signature: str, timestamp: 
     # Recreate and compare signature
     message = f"{timestamp}.{body}"
     expected = hmac.new(
-        client_id.encode("utf-8"),
+        secret.encode("utf-8"),
         message.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
@@ -43,7 +43,7 @@ async def require_maya_signature(request: Request) -> str:
 
     body = (await request.body()).decode("utf-8")
 
-    if not verify_maya_signature(body, client_id, signature, timestamp):
+    if not verify_maya_signature(body, settings.MAYA_CLIENT_SECRET, signature, timestamp):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     return body

@@ -24,7 +24,7 @@ class ChatUser(BaseModel):
 
 
 class ChatContext(BaseModel):
-    agent_user_id: str
+    agent_user_id: str = ""
 
 
 class ConversationMessage(BaseModel):
