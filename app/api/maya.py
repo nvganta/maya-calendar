@@ -45,6 +45,7 @@ async def provision(
 async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
+    _signature: str = Depends(require_maya_signature),
 ):
     """Called by Maya every time a user sends a calendar-related message."""
     user = None

@@ -159,7 +159,7 @@ async def parse_intent(
     except json.JSONDecodeError as e:
         logger.warning(f"LLM returned invalid JSON: {e}")
         return _fallback_parse(message, tz)
-    except Exception as e:
+    except (ValueError, KeyError) as e:
         logger.warning(f"Intent parsing failed: {e}")
         return ParsedIntent(action="unknown", raw_message=message)
 
