@@ -25,6 +25,8 @@ class Event(Base):
     is_all_day: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence: Mapped[str | None] = mapped_column(String(200), nullable=True)  # RRULE string
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    # "work", "personal", "focus", "health" -- for smart conflicts and analytics
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
