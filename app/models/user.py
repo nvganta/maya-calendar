@@ -14,6 +14,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)
+    # Working hours (hour of day, 0–23). Used for availability checks and free-slot suggestions.
+    working_hours_start: Mapped[int] = mapped_column(Integer, nullable=False, default=9)
+    working_hours_end: Mapped[int] = mapped_column(Integer, nullable=False, default=18)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

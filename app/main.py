@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,9 +11,27 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background workers on startup, clean up on shutdown."""
+    from app.services.reminder_worker import run_reminder_worker
+    reminder_task = asyncio.create_task(run_reminder_worker())
+    logger.info("Calendar agent started.")
+    try:
+        yield
+    finally:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Calendar agent shut down.")
+
+
 settings = get_settings()
 
-app = FastAPI(title=settings.APP_NAME)
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 # CORS — allow Maya frontend + local dev
 app.add_middleware(

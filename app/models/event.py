@@ -23,7 +23,7 @@ class Event(Base):
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_all_day: Mapped[bool] = mapped_column(Boolean, default=False)
-    recurrence: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    recurrence: Mapped[str | None] = mapped_column(String(200), nullable=True)  # RRULE string
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
@@ -35,3 +35,4 @@ class Event(Base):
     # Relationships
     user: Mapped["User"] = relationship(back_populates="events")  # noqa: F821
     reminders: Mapped[list["Reminder"]] = relationship(back_populates="event", cascade="all, delete-orphan")  # noqa: F821
+    exceptions: Mapped[list["RecurringEventException"]] = relationship(back_populates="event", cascade="all, delete-orphan")  # noqa: F821

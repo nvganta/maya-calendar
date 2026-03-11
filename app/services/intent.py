@@ -1,5 +1,11 @@
 """
 Intent parsing service — takes natural language and extracts structured intent + data.
+
+Phase 2 additions:
+- recurrence_rule field (RRULE format instead of simple string)
+- find_free_slots intent — "when am I free?", "find me 2 hours"
+- skip_occurrence intent — "skip this week's standup"
+- set_working_hours intent — "my working hours are 9am to 6pm"
 """
 
 import json
@@ -21,14 +27,16 @@ DEFAULT_TIMEZONE = "America/New_York"
 class ParsedIntent(BaseModel):
     """Structured output from intent parsing."""
     action: str  # create_event, list_events, check_availability, update_event, delete_event,
-                 # create_reminder, list_reminders, unknown
+                 # create_reminder, list_reminders, find_free_slots, skip_occurrence,
+                 # set_working_hours, unknown
     title: str | None = None
     description: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     location: str | None = None
     is_all_day: bool = False
-    recurrence: str | None = None
+    # RRULE string e.g. "FREQ=WEEKLY;BYDAY=MO"
+    recurrence_rule: str | None = None
     tags: list[str] | None = None
 
     # For updates/deletes
@@ -41,6 +49,16 @@ class ParsedIntent(BaseModel):
     # For list queries and availability
     date_range_start: datetime | None = None
     date_range_end: datetime | None = None
+
+    # For find_free_slots
+    desired_duration_minutes: int | None = None
+
+    # For skip_occurrence
+    skip_occurrence_date: datetime | None = None
+
+    # For set_working_hours
+    working_hours_start: int | None = None
+    working_hours_end: int | None = None
 
     # Raw fallback
     raw_message: str = ""
@@ -59,37 +77,44 @@ User's timezone: {user_timezone}
 - delete_event
 - create_reminder
 - list_reminders
+- find_free_slots      <- "when am I free?", "find me 2 hours", "what time is available?"
+- skip_occurrence      <- "skip this week's standup", "cancel just tomorrow's meeting"
+- set_working_hours    <- "my working hours are 9am to 6pm"
 - unknown
 
 **IMPORTANT datetime rules:**
 - All datetimes MUST include timezone offset matching the user's timezone (e.g., "-05:00")
 - Never use bare "Z"
 - Resolve relative dates: "tomorrow", "next Monday", "in 2 hours" relative to {current_time}
-- Vague times: "morning" → 09:00, "afternoon" → 13:00, "evening" → 18:00, "night" → 20:00
+- Vague times: "morning" -> 09:00, "afternoon" -> 13:00, "evening" -> 18:00, "night" -> 20:00
 - Default duration: 1 hour if not specified
+
+**RRULE format for recurring events:**
+- "every Monday" -> "FREQ=WEEKLY;BYDAY=MO"
+- "every weekday" -> "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+- "daily standup" -> "FREQ=DAILY"
+- "every other week" -> "FREQ=WEEKLY;INTERVAL=2"
+- "every month on the 1st" -> "FREQ=MONTHLY;BYMONTHDAY=1"
 
 Respond with valid JSON only. Examples:
 
+User: "Schedule a team standup every Monday at 10am for 30 minutes"
+{"action": "create_event", "title": "Team standup", "start_time": "2026-03-16T10:00:00-05:00", "end_time": "2026-03-16T10:30:00-05:00", "recurrence_rule": "FREQ=WEEKLY;BYDAY=MO"}
+
+User: "When am I free tomorrow?"
+{"action": "find_free_slots", "date_range_start": "2026-03-10T00:00:00-05:00", "date_range_end": "2026-03-10T23:59:59-05:00"}
+
+User: "Find me 2 hours for a meeting this afternoon"
+{"action": "find_free_slots", "date_range_start": "2026-03-09T13:00:00-05:00", "date_range_end": "2026-03-09T18:00:00-05:00", "desired_duration_minutes": 120}
+
+User: "My working hours are 9am to 6pm"
+{"action": "set_working_hours", "working_hours_start": 9, "working_hours_end": 18}
+
+User: "Skip this week's standup"
+{"action": "skip_occurrence", "target_event_query": "standup", "skip_occurrence_date": "2026-03-16T10:00:00-05:00"}
+
 User: "Schedule a team meeting Thursday at 3pm"
-{{"action": "create_event", "title": "Team meeting", "start_time": "2026-03-12T15:00:00-05:00", "end_time": "2026-03-12T16:00:00-05:00"}}
-
-User: "What's on my calendar this week?"
-{{"action": "list_events", "date_range_start": "2026-03-09T00:00:00-05:00", "date_range_end": "2026-03-15T23:59:59-05:00"}}
-
-User: "Am I free tomorrow afternoon?"
-{{"action": "check_availability", "date_range_start": "2026-03-10T13:00:00-05:00", "date_range_end": "2026-03-10T18:00:00-05:00"}}
-
-User: "Move the team meeting to Friday"
-{{"action": "update_event", "target_event_query": "team meeting", "start_time": "2026-03-13T15:00:00-05:00"}}
-
-User: "Cancel the dentist appointment"
-{{"action": "delete_event", "target_event_query": "dentist"}}
-
-User: "Remind me to call John at 5pm"
-{{"action": "create_reminder", "reminder_message": "Call John", "remind_at": "2026-03-09T17:00:00-05:00"}}
-
-User: "What reminders do I have?"
-{{"action": "list_reminders"}}
+{"action": "create_event", "title": "Team meeting", "start_time": "2026-03-12T15:00:00-05:00", "end_time": "2026-03-12T16:00:00-05:00"}
 
 FOLLOW-UP CONTEXT: Use conversation history to resolve references like "make it 4pm instead", "cancel that", "add a reminder for it".
 
@@ -151,7 +176,7 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _ensure_timezone_aware(intent: ParsedIntent, tz: ZoneInfo) -> ParsedIntent:
-    for field in ("start_time", "end_time", "remind_at", "date_range_start", "date_range_end"):
+    for field in ("start_time", "end_time", "remind_at", "date_range_start", "date_range_end", "skip_occurrence_date"):
         val = getattr(intent, field)
         if val is not None and val.tzinfo is None:
             setattr(intent, field, val.replace(tzinfo=tz))

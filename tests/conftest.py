@@ -17,6 +17,7 @@ from app.core.database import Base
 from app.models.user import User
 from app.models.event import Event
 from app.models.reminder import Reminder  # noqa: F401
+from app.models.recurring_exception import RecurringEventException  # noqa: F401
 
 
 # --- SQLite compatibility: map PostgreSQL ARRAY(String) → JSON ---
