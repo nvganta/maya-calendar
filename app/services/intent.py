@@ -176,7 +176,7 @@ User: "What about tomorrow?"
 {{"action": "daily_digest", "date_range_start": "2026-03-10T00:00:00-05:00", "date_range_end": "2026-03-10T23:59:59-05:00"}}
 
 User: "How's my week?"
-{{"action": "daily_digest", "date_range_start": "2026-03-09T00:00:00-05:00", "date_range_end": "2026-03-15T23:59:59-05:00"}}
+{{"action": "daily_digest", "date_range_start": "2026-03-09T00:00:00-05:00", "date_range_end": "2026-03-16T00:00:00-05:00"}}
 
 User: "My working hours are 9am to 6pm"
 {{"action": "set_working_hours", "working_hours_start": 9, "working_hours_end": 18}}

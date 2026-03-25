@@ -233,8 +233,8 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     start = intent.date_range_start or today_start
-    end = intent.date_range_end or (start + timedelta(days=1))
-    is_multiday = (end - start).days > 1
+    end = intent.date_range_end or (start + timedelta(days=1) - timedelta(seconds=1))
+    is_multiday = end.astimezone(tz).date() > start.astimezone(tz).date()
 
     all_events = await _get_events_in_range(db, user, start, end)
 
@@ -251,8 +251,15 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
         for (ev_start, ev_end, *_) in all_events
     )
     working_mins = (user.working_hours_end - user.working_hours_start) * 60
-    num_days = max((end - start).days, 1)
-    total_working_mins = working_mins * num_days
+    # Count weekdays only for free-time calculation (weekends aren't working hours)
+    start_date = start.astimezone(tz).date()
+    end_date = end.astimezone(tz).date()
+    num_days = max((end_date - start_date).days + 1, 1)
+    weekday_count = sum(
+        1 for i in range(num_days)
+        if (start_date + timedelta(days=i)).weekday() < 5
+    )
+    total_working_mins = working_mins * max(weekday_count, 1)
     free_mins = max(total_working_mins - total_meeting_mins, 0)
 
     # --- Single-day digest ---
@@ -289,7 +296,9 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     lightest_day = min(day_minutes, key=day_minutes.get) if day_minutes else None
 
     period = _describe_period(start, end, tz)
-    lines = [f"Here's your week {period} — **{len(all_events)} event(s)** across **{len(days)} day(s)**:\n"]
+    span_days = (end.astimezone(tz).date() - start.astimezone(tz).date()).days + 1
+    span_label = "week" if span_days >= 6 else f"{span_days}-day"
+    lines = [f"Here's your {span_label} {period} — **{len(all_events)} event(s)** across **{len(days)} day(s)**:\n"]
 
     current = start.astimezone(tz).date()
     last = end.astimezone(tz).date()
