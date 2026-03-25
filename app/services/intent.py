@@ -27,7 +27,7 @@ class ParsedIntent(BaseModel):
     """Structured output from intent parsing."""
     action: str  # create_event, list_events, check_availability, update_event, delete_event,
                  # create_reminder, list_reminders, find_free_slots, skip_occurrence,
-                 # set_working_hours, search_events, set_preference, unknown
+                 # set_working_hours, search_events, set_preference, daily_digest, unknown
     title: str | None = None
     description: str | None = None
     start_time: datetime | None = None
@@ -95,6 +95,7 @@ User's timezone: {user_timezone}
 - set_working_hours    ← "my working hours are 9am to 6pm"
 - search_events        ← "when did I last meet with Sarah?", "what's my next event?", "how many meetings last week?"
 - set_preference       ← "I prefer meetings in the afternoon", "add 15 min buffer between meetings", "default events to 30 minutes"
+- daily_digest         ← "what does my day look like?", "what about tomorrow?", "how's my week?", "give me a rundown of today"
 - unknown
 
 **IMPORTANT datetime rules:**
@@ -167,6 +168,15 @@ User: "When am I free tomorrow?"
 
 User: "Find me 2 hours for deep work this afternoon"
 {{"action": "find_free_slots", "category": "focus", "date_range_start": "2026-03-09T13:00:00-05:00", "date_range_end": "2026-03-09T18:00:00-05:00", "desired_duration_minutes": 120}}
+
+User: "What does my day look like?"
+{{"action": "daily_digest", "date_range_start": "2026-03-09T00:00:00-05:00", "date_range_end": "2026-03-09T23:59:59-05:00"}}
+
+User: "What about tomorrow?"
+{{"action": "daily_digest", "date_range_start": "2026-03-10T00:00:00-05:00", "date_range_end": "2026-03-10T23:59:59-05:00"}}
+
+User: "How's my week?"
+{{"action": "daily_digest", "date_range_start": "2026-03-09T00:00:00-05:00", "date_range_end": "2026-03-15T23:59:59-05:00"}}
 
 User: "My working hours are 9am to 6pm"
 {{"action": "set_working_hours", "working_hours_start": 9, "working_hours_end": 18}}

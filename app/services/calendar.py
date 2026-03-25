@@ -74,6 +74,7 @@ async def handle_calendar_action(intent: ParsedIntent, user: User, db: AsyncSess
         "set_working_hours": _set_working_hours,
         "search_events":    _search_events,
         "set_preference":   _set_preference,
+        "daily_digest":     _daily_digest,
     }
 
     handler = handlers.get(intent.action)
@@ -87,7 +88,8 @@ async def handle_calendar_action(intent: ParsedIntent, user: User, db: AsyncSess
             "- **Search** — \"When was my last dentist appointment?\"\n"
             "- **Preferences** — \"Default events to 30 minutes\" / \"Add 15-min buffer\"\n"
             "- **Update/Cancel** — \"Move the standup to 11am\" / \"Cancel Friday's meeting\"\n"
-            "- **Reminders** — \"Remind me to call John at 5pm\""
+            "- **Reminders** — \"Remind me to call John at 5pm\"\n"
+            "- **Digest** — \"What does my day look like?\" / \"How's my week?\""
         )
 
     return await handler(intent, user, db)
@@ -223,6 +225,95 @@ async def _list_events(intent: ParsedIntent, user: User, db: AsyncSession) -> st
 
     period = _describe_period(start, end, tz)
     return f"Here's what you have {period}:" + "\n".join(lines)
+
+
+async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
+    tz = _user_tz(user)
+    now = datetime.now(tz)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    start = intent.date_range_start or today_start
+    end = intent.date_range_end or (start + timedelta(days=1))
+    is_multiday = (end - start).days > 1
+
+    all_events = await _get_events_in_range(db, user, start, end)
+
+    # No events — short, friendly response
+    if not all_events:
+        period = _describe_period(start, end, tz)
+        if is_multiday:
+            return f"Your calendar is clear {period} — enjoy the open schedule!"
+        return f"You have nothing scheduled {period}. A completely free day!"
+
+    # Compute stats
+    total_meeting_mins = sum(
+        int((ev_end - ev_start).total_seconds() / 60)
+        for (ev_start, ev_end, *_) in all_events
+    )
+    working_mins = (user.working_hours_end - user.working_hours_start) * 60
+    num_days = max((end - start).days, 1)
+    total_working_mins = working_mins * num_days
+    free_mins = max(total_working_mins - total_meeting_mins, 0)
+
+    # --- Single-day digest ---
+    if not is_multiday:
+        period = _describe_period(start, end, tz)
+        lines = [f"Here's your {period} rundown — **{len(all_events)} event(s)**, "
+                 f"{_format_duration(total_meeting_mins)} scheduled, "
+                 f"{_format_duration(free_mins)} free:\n"]
+
+        for (ev_start, ev_end, title, location, category) in all_events:
+            icon = CATEGORY_ICONS.get(category, "") + " " if category else ""
+            time_str = _format_time_range(ev_start, ev_end, tz)
+            location_str = f" 📍 {location}" if location else ""
+            lines.append(f"  • {time_str} — {icon}**{title}**{location_str}")
+
+        # Highlight first event if it's coming up soon
+        first_start = all_events[0][0]
+        if first_start > now and (first_start - now).total_seconds() < 3600:
+            mins_until = int((first_start - now).total_seconds() / 60)
+            lines.append(f"\n⏰ Next up: **{all_events[0][2]}** in {mins_until} min.")
+
+        return "\n".join(lines)
+
+    # --- Multi-day (week) digest ---
+    # Group events by day
+    days: dict[date, list[tuple]] = {}
+    for ev in all_events:
+        day = ev[0].astimezone(tz).date()
+        days.setdefault(day, []).append(ev)
+
+    # Find busiest and lightest days
+    day_minutes = {d: sum(int((e[1] - e[0]).total_seconds() / 60) for e in evs) for d, evs in days.items()}
+    busiest_day = max(day_minutes, key=day_minutes.get) if day_minutes else None
+    lightest_day = min(day_minutes, key=day_minutes.get) if day_minutes else None
+
+    period = _describe_period(start, end, tz)
+    lines = [f"Here's your week {period} — **{len(all_events)} event(s)** across **{len(days)} day(s)**:\n"]
+
+    current = start.astimezone(tz).date()
+    last = end.astimezone(tz).date()
+    while current <= last:
+        day_evs = days.get(current, [])
+        label = _format_day_label(current, now.date())
+        count = len(day_evs)
+        mins = day_minutes.get(current, 0)
+
+        marker = ""
+        if current == busiest_day and len(days) > 1:
+            marker = " ← busiest"
+        elif current == lightest_day and len(days) > 1 and count > 0:
+            marker = " ← lightest"
+
+        if count == 0:
+            lines.append(f"  **{label}** — free 🎉")
+        else:
+            lines.append(f"  **{label}** — {count} event(s), {_format_duration(mins)}{marker}")
+
+        current += timedelta(days=1)
+
+    lines.append(f"\nTotal: {_format_duration(total_meeting_mins)} scheduled, {_format_duration(free_mins)} free.")
+    return "\n".join(lines)
 
 
 async def _check_availability(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
