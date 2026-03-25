@@ -20,13 +20,14 @@ from app.models.reminder import Reminder  # noqa: F401
 from app.models.recurring_exception import RecurringEventException  # noqa: F401
 
 
-# --- SQLite compatibility: map PostgreSQL ARRAY(String) → JSON ---
+# --- SQLite compatibility: map PostgreSQL-specific types → JSON ---
 # This lets us run tests without PostgreSQL.
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 @sa_event.listens_for(Base.metadata, "column_reflect")
 def _convert_pg_types(inspector, table, column_info):
-    if isinstance(column_info.get("type"), ARRAY):
+    col_type = column_info.get("type")
+    if isinstance(col_type, (ARRAY, JSONB)):
         column_info["type"] = JSON()
 
 
@@ -41,12 +42,21 @@ async def db_session():
     engine = create_async_engine(TEST_DB_URL, echo=False)
 
     # For SQLite: temporarily override PG-specific column types for DDL creation
-    # We swap ARRAY -> JSON at the DDL level, then restore after table creation
+    # We swap ARRAY -> JSON and JSONB -> JSON, then restore after
     from app.models.event import Event as EventModel
+    from app.models.user import User as UserModel
+
+    overrides = []
+    # ARRAY(String) tags column
     tags_col = EventModel.__table__.c.tags
-    original_type = tags_col.type
     if hasattr(tags_col.type, 'item_type'):
+        overrides.append((tags_col, tags_col.type))
         tags_col.type = JSON()
+    # JSONB preferences column
+    prefs_col = UserModel.__table__.c.preferences
+    if isinstance(prefs_col.type, JSONB):
+        overrides.append((prefs_col, prefs_col.type))
+        prefs_col.type = JSON()
 
     try:
         async with engine.begin() as conn:
@@ -60,7 +70,8 @@ async def db_session():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
     finally:
-        tags_col.type = original_type
+        for col, original_type in overrides:
+            col.type = original_type
         await engine.dispose()
 
 
