@@ -189,19 +189,19 @@ assistant message and use it as "target_event_query".
 
 Follow-up examples (assuming previous assistant message contained a context tag):
 
-Previous assistant: "Done! I've scheduled **Team Meeting** for Thu Mar 26, 3:00 – 4:00 PM.\n[ctx:{{"event_id":"abc-123","title":"Team Meeting","time":"2026-03-26T15:00:00-05:00"}}]"
+Previous assistant: "Done! I've scheduled **Team Meeting** for Thu Mar 26, 3:00 – 4:00 PM.\n[ctx:{{"event_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","title":"Team Meeting","time":"2026-03-26T15:00:00-05:00"}}]"
 
 User: "cancel that"
-{{"action": "delete_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting"}}
+{{"action": "delete_event", "target_event_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "target_event_query": "Team Meeting"}}
 
 User: "make it 4pm instead"
-{{"action": "update_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting", "start_time": "2026-03-26T16:00:00-05:00"}}
+{{"action": "update_event", "target_event_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "target_event_query": "Team Meeting", "start_time": "2026-03-26T16:00:00-05:00"}}
 
 User: "add a reminder for it 30 minutes before"
-{{"action": "create_reminder", "target_event_id": "abc-123", "reminder_message": "Team Meeting", "remind_at": "2026-03-26T14:30:00-05:00"}}
+{{"action": "create_reminder", "target_event_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "reminder_message": "Team Meeting", "remind_at": "2026-03-26T14:30:00-05:00"}}
 
 User: "change the location to Room 5"
-{{"action": "update_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting", "location": "Room 5"}}
+{{"action": "update_event", "target_event_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "target_event_query": "Team Meeting", "location": "Room 5"}}
 
 Only output JSON. No explanation."""
 

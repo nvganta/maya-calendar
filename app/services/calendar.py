@@ -592,6 +592,9 @@ async def _create_reminder(intent: ParsedIntent, user: User, db: AsyncSession) -
             # If 15 min before is already in the past, fall back to event start time
             if candidate <= datetime.now(timezone.utc):
                 candidate = linked_event.start_time
+            # If even the event start is in the past, don't save a dead reminder
+            if candidate <= datetime.now(timezone.utc):
+                return f"**{linked_event.title}** has already passed — no reminder was set."
             intent.remind_at = candidate
 
     if not intent.reminder_message or not intent.remind_at:
