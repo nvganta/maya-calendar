@@ -40,7 +40,8 @@ class ParsedIntent(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
 
-    # For updates/deletes
+    # For updates/deletes — ID from conversation context tag, or title for fuzzy search
+    target_event_id: str | None = None
     target_event_query: str | None = None
 
     # For reminders
@@ -173,7 +174,34 @@ User: "My working hours are 9am to 6pm"
 User: "Skip this week's standup"
 {{"action": "skip_occurrence", "target_event_query": "standup", "skip_occurrence_date": "2026-03-16T10:00:00-05:00"}}
 
-FOLLOW-UP CONTEXT: Use conversation history to resolve references like "make it 4pm instead", "cancel that", "add a reminder for it".
+**FOLLOW-UP REFERENCES — resolving "it", "that", "the meeting":**
+
+When the user says "cancel that", "make it 4pm", "add a reminder for it", etc., look at the
+most recent assistant message in conversation history. If it contains a context tag like
+[ctx:event_id=<uuid>,title=<title>,time=<iso>], use it:
+
+- Set "target_event_id" to the UUID from the tag
+- Set "target_event_query" to the title from the tag
+- Parse the user's actual intent (delete_event, update_event, create_reminder, etc.)
+
+If no context tag is present, extract the event name from **bold** text in the previous
+assistant message and use it as "target_event_query".
+
+Follow-up examples (assuming previous assistant message contained a context tag):
+
+Previous assistant: "Done! I've scheduled **Team Meeting** for Thu Mar 26, 3:00 – 4:00 PM.\\n[ctx:event_id=abc-123,title=Team Meeting,time=2026-03-26T15:00:00-05:00]"
+
+User: "cancel that"
+{{"action": "delete_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting"}}
+
+User: "make it 4pm instead"
+{{"action": "update_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting", "start_time": "2026-03-26T16:00:00-05:00"}}
+
+User: "add a reminder for it 30 minutes before"
+{{"action": "create_reminder", "target_event_id": "abc-123", "reminder_message": "Team Meeting", "remind_at": "2026-03-26T14:30:00-05:00"}}
+
+User: "change the location to Room 5"
+{{"action": "update_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting", "location": "Room 5"}}
 
 Only output JSON. No explanation."""
 

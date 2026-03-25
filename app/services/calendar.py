@@ -192,6 +192,7 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
         if btb:
             response += btb
 
+    response += _event_context_tag(event.id, intent.title, intent.start_time, tz)
     return response
 
 
@@ -268,19 +269,19 @@ async def _find_free_slots(intent: ParsedIntent, user: User, db: AsyncSession) -
 async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
     tz = _user_tz(user)
 
-    if not intent.target_event_query:
+    if not intent.target_event_id and not intent.target_event_query:
         return "Which event would you like to update?"
 
-    matches = await _find_events_by_query(db, user.id, intent.target_event_query)
-    if not matches:
-        return f"I couldn't find an event matching \"{intent.target_event_query}\"."
-    if len(matches) > 1:
+    event, matches, err = await _resolve_event(intent, user, db)
+    if err:
+        return err
+    if matches:
         lines = [f"Found {len(matches)} matching events. Which one?\n"]
         for i, e in enumerate(matches[:5], 1):
             lines.append(f"  {i}. **{e.title}** — {_format_time_range(e.start_time, e.end_time, tz)}")
         return "\n".join(lines)
-
-    event = matches[0]
+    if not event:
+        return "Which event would you like to update?"
     changes = []
 
     if intent.title and intent.title != event.title:
@@ -327,25 +328,27 @@ async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
         return f"Found **{event.title}** but I'm not sure what to change. What would you like to update?"
 
     await db.commit()
-    return f"Updated **{event.title}** — {', '.join(changes)}."
+    response = f"Updated **{event.title}** — {', '.join(changes)}."
+    response += _event_context_tag(event.id, event.title, event.start_time, tz)
+    return response
 
 
 async def _delete_event(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
     tz = _user_tz(user)
 
-    if not intent.target_event_query:
+    if not intent.target_event_id and not intent.target_event_query:
         return "Which event would you like to cancel?"
 
-    matches = await _find_events_by_query(db, user.id, intent.target_event_query)
-    if not matches:
-        return f"I couldn't find an event matching \"{intent.target_event_query}\"."
-    if len(matches) > 1:
+    event, matches, err = await _resolve_event(intent, user, db)
+    if err:
+        return err
+    if matches:
         lines = [f"Found {len(matches)} matches. Which one should I cancel?\n"]
         for i, e in enumerate(matches[:5], 1):
             lines.append(f"  {i}. **{e.title}** — {_format_time_range(e.start_time, e.end_time, tz)}")
         return "\n".join(lines)
-
-    event = matches[0]
+    if not event:
+        return "Which event would you like to cancel?"
     title = event.title
     is_recurring = bool(event.recurrence)
     time_str = _format_time_range(event.start_time, event.end_time, tz)
@@ -360,19 +363,19 @@ async def _delete_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
 async def _skip_occurrence(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
     tz = _user_tz(user)
 
-    if not intent.target_event_query:
+    if not intent.target_event_id and not intent.target_event_query:
         return "Which recurring event's occurrence would you like to skip?"
 
-    matches = await _find_events_by_query(db, user.id, intent.target_event_query, recurring_only=True)
-    if not matches:
-        return f"I couldn't find a recurring event matching \"{intent.target_event_query}\"."
-    if len(matches) > 1:
+    event, matches, err = await _resolve_event(intent, user, db, recurring_only=True)
+    if err:
+        return err
+    if matches:
         lines = [f"Found {len(matches)} recurring events. Which one?\n"]
         for i, e in enumerate(matches[:5], 1):
             lines.append(f"  {i}. **{e.title}** ({_describe_rrule(e.recurrence).strip()})")
         return "\n".join(lines)
-
-    event = matches[0]
+    if not event:
+        return "Which recurring event's occurrence would you like to skip?"
     if intent.skip_occurrence_date:
         exception_date = intent.skip_occurrence_date.astimezone(tz).date()
     else:
@@ -396,7 +399,9 @@ async def _skip_occurrence(intent: ParsedIntent, user: User, db: AsyncSession) -
     await db.commit()
 
     day_str = _format_day_label(exception_date, datetime.now(tz).date())
-    return f"Done — skipped the **{event.title}** occurrence on {day_str}."
+    response = f"Done — skipped the **{event.title}** occurrence on {day_str}."
+    response += _event_context_tag(event.id, event.title, event.start_time, tz)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +425,9 @@ async def _search_events(intent: ParsedIntent, user: User, db: AsyncSession) -> 
         event = result.scalars().first()
         if not event:
             return "You have no upcoming events on your calendar."
-        return f"Your next event is **{event.title}** — {_format_time_range(event.start_time, event.end_time, tz)}."
+        response = f"Your next event is **{event.title}** — {_format_time_range(event.start_time, event.end_time, tz)}."
+        response += _event_context_tag(event.id, event.title, event.start_time, tz)
+        return response
 
     # Count-all query with no search term — "how many events did I have last week?"
     if not query and intent.is_count_query and intent.date_range_start and intent.date_range_end:
@@ -480,7 +487,9 @@ async def _search_events(intent: ParsedIntent, user: User, db: AsyncSession) -> 
     if direction == "past" and len(events) == 1:
         e = events[0]
         day_str = _format_day_label(e.start_time.astimezone(tz).date(), now.date())
-        return f"Your last **{query}** was **{e.title}** on {day_str} ({_format_time_range(e.start_time, e.end_time, tz)})."
+        response = f"Your last **{query}** was **{e.title}** on {day_str} ({_format_time_range(e.start_time, e.end_time, tz)})."
+        response += _event_context_tag(e.id, e.title, e.start_time, tz)
+        return response
 
     lines = [f"Found {len(events)} result(s) for \"{query}\":\n"]
     for e in events:
@@ -561,15 +570,44 @@ async def _set_preference(intent: ParsedIntent, user: User, db: AsyncSession) ->
 
 async def _create_reminder(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
     tz = _user_tz(user)
+
+    # Resolve linked event from conversation context (e.g. "add a reminder for it")
+    linked_event = None
+    if intent.target_event_id:
+        try:
+            parsed_id = uuid.UUID(intent.target_event_id)
+            result = await db.execute(
+                select(Event).where(and_(Event.id == parsed_id, Event.user_id == user.id))
+            )
+            linked_event = result.scalar_one_or_none()
+        except ValueError:
+            pass
+
+    # Fill in defaults from linked event when the user said something like "add a reminder for it"
+    if linked_event:
+        if not intent.reminder_message:
+            intent.reminder_message = linked_event.title
+        if not intent.remind_at:
+            intent.remind_at = linked_event.start_time - timedelta(minutes=15)
+
     if not intent.reminder_message or not intent.remind_at:
         return "I need a message and a time. For example, \"Remind me to call John at 5pm.\""
 
-    db.add(Reminder(user_id=user.id, message=intent.reminder_message, remind_at=intent.remind_at))
+    reminder = Reminder(
+        user_id=user.id,
+        event_id=linked_event.id if linked_event else None,
+        message=intent.reminder_message,
+        remind_at=intent.remind_at,
+    )
+    db.add(reminder)
     await db.commit()
 
     time_str = _format_time_short(intent.remind_at, tz)
     day_str = _format_day_label(intent.remind_at.astimezone(tz).date(), datetime.now(tz).date())
-    return f"Reminder set! I'll remind you to **{intent.reminder_message}** on {day_str} at {time_str}."
+    response = f"Reminder set! I'll remind you to **{intent.reminder_message}** on {day_str} at {time_str}."
+    if linked_event:
+        response += _event_context_tag(linked_event.id, linked_event.title, linked_event.start_time, tz)
+    return response
 
 
 async def _list_reminders(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
@@ -803,6 +841,45 @@ def _escape_like(query: str) -> str:
     """Escape SQL LIKE metacharacters so they are treated as literals."""
     return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
+async def _resolve_event(
+    intent: ParsedIntent, user: User, db: AsyncSession, recurring_only: bool = False
+) -> tuple[Event | None, list[Event], str | None]:
+    """Resolve an event from intent — try ID first, fall back to fuzzy title search.
+
+    Returns (event, matches, error_message).
+    - If exactly one match: (event, [], None)
+    - If multiple matches: (None, matches, None) — caller should disambiguate
+    - If no match: (None, [], error_message)
+    """
+    # Try exact ID match from conversation context
+    if intent.target_event_id:
+        try:
+            parsed_id = uuid.UUID(intent.target_event_id)
+            result = await db.execute(
+                select(Event).where(and_(Event.id == parsed_id, Event.user_id == user.id))
+            )
+            event = result.scalar_one_or_none()
+            if event:
+                if recurring_only and not event.recurrence:
+                    return None, [], f"**{event.title}** is not a recurring event."
+                return event, [], None
+        except ValueError:
+            pass
+
+    # Fall back to fuzzy title search
+    query = intent.target_event_query
+    if not query:
+        return None, [], None  # caller should handle missing query
+
+    matches = await _find_events_by_query(db, user.id, query, recurring_only=recurring_only)
+    if not matches:
+        kind = "recurring event" if recurring_only else "event"
+        return None, [], f"I couldn't find a {kind} matching \"{query}\"."
+    if len(matches) == 1:
+        return matches[0], [], None
+    return None, matches, None
+
+
 async def _find_overlapping_events(
     db: AsyncSession, user_id: uuid.UUID, start: datetime, end: datetime
 ) -> list[Event]:
@@ -857,6 +934,11 @@ def _get_prefs(user: User) -> dict:
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
+
+def _event_context_tag(event_id: uuid.UUID, title: str, start_time: datetime, tz: ZoneInfo) -> str:
+    """Append a context tag to responses so the LLM can resolve follow-up references."""
+    return f"\n[ctx:event_id={event_id},title={title},time={start_time.astimezone(tz).isoformat()}]"
+
 
 def _user_tz(user: User) -> ZoneInfo:
     return ZoneInfo(user.timezone or DEFAULT_TIMEZONE)
