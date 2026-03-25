@@ -253,7 +253,9 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     working_mins = (user.working_hours_end - user.working_hours_start) * 60
     # Count weekdays only for free-time calculation (weekends aren't working hours)
     start_date = start.astimezone(tz).date()
-    end_date = end.astimezone(tz).date()
+    # Treat midnight end boundary as "end of previous day" to avoid off-by-one
+    end_local = end.astimezone(tz)
+    end_date = (end_local - timedelta(seconds=1)).date() if end_local.hour == 0 and end_local.minute == 0 and end_local.second == 0 else end_local.date()
     num_days = max((end_date - start_date).days + 1, 1)
     weekday_count = sum(
         1 for i in range(num_days)
@@ -275,11 +277,13 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
             location_str = f" 📍 {location}" if location else ""
             lines.append(f"  • {time_str} — {icon}**{title}**{location_str}")
 
-        # Highlight first event if it's coming up soon
-        first_start = all_events[0][0]
-        if first_start > now and (first_start - now).total_seconds() < 3600:
-            mins_until = int((first_start - now).total_seconds() / 60)
-            lines.append(f"\n⏰ Next up: **{all_events[0][2]}** in {mins_until} min.")
+        # Highlight first upcoming event if it's coming up soon
+        upcoming = next(((ev[0], ev[2]) for ev in all_events if ev[0] > now), None)
+        if upcoming:
+            first_future_start, first_future_title = upcoming
+            if (first_future_start - now).total_seconds() < 3600:
+                mins_until = int((first_future_start - now).total_seconds() / 60)
+                lines.append(f"\n⏰ Next up: **{first_future_title}** in {mins_until} min.")
 
         return "\n".join(lines)
 
@@ -296,12 +300,12 @@ async def _daily_digest(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     lightest_day = min(day_minutes, key=day_minutes.get) if day_minutes else None
 
     period = _describe_period(start, end, tz)
-    span_days = (end.astimezone(tz).date() - start.astimezone(tz).date()).days + 1
+    span_days = (end_date - start_date).days + 1
     span_label = "week" if span_days >= 6 else f"{span_days}-day"
     lines = [f"Here's your {span_label} {period} — **{len(all_events)} event(s)** across **{len(days)} day(s)**:\n"]
 
-    current = start.astimezone(tz).date()
-    last = end.astimezone(tz).date()
+    current = start_date
+    last = end_date
     while current <= last:
         day_evs = days.get(current, [])
         label = _format_day_label(current, now.date())
