@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
+    # Google Calendar OAuth (optional — sync disabled if not set)
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8001/api/google/callback"
+
     # App
     APP_NAME: str = "Maya Calendar Agent"
     DEBUG: bool = False
