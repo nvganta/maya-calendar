@@ -22,4 +22,4 @@ class ExternalEventMapping(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    event: Mapped["Event"] = relationship()  # noqa: F821
+    event: Mapped["Event"] = relationship(back_populates="external_mappings")  # noqa: F821

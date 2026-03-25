@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8001/api/google/callback"
 
+    # Token encryption key for OAuth tokens at rest (Fernet key, base64-encoded 32 bytes)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    TOKEN_ENCRYPTION_KEY: str = ""
+
     # App
     APP_NAME: str = "Maya Calendar Agent"
     DEBUG: bool = False

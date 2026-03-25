@@ -19,7 +19,7 @@ def upgrade() -> None:
     op.create_table(
         "google_oauth_tokens",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("access_token", sa.Text(), nullable=False),
         sa.Column("refresh_token", sa.Text(), nullable=True),
         sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True),
@@ -48,7 +48,7 @@ def upgrade() -> None:
     op.create_table(
         "sync_queue_items",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("action", sa.String(20), nullable=False),
         sa.Column("event_id", UUID(as_uuid=True), sa.ForeignKey("events.id", ondelete="SET NULL"), nullable=True),
         sa.Column("external_event_id", sa.String(500), nullable=True),
