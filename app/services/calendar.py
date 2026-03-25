@@ -588,7 +588,11 @@ async def _create_reminder(intent: ParsedIntent, user: User, db: AsyncSession) -
         if not intent.reminder_message:
             intent.reminder_message = linked_event.title
         if not intent.remind_at:
-            intent.remind_at = linked_event.start_time - timedelta(minutes=15)
+            candidate = linked_event.start_time - timedelta(minutes=15)
+            # If 15 min before is already in the past, fall back to event start time
+            if candidate <= datetime.now(timezone.utc):
+                candidate = linked_event.start_time
+            intent.remind_at = candidate
 
     if not intent.reminder_message or not intent.remind_at:
         return "I need a message and a time. For example, \"Remind me to call John at 5pm.\""
@@ -863,6 +867,11 @@ async def _resolve_event(
                 if recurring_only and not event.recurrence:
                     return None, [], f"**{event.title}** is not a recurring event."
                 return event, [], None
+            else:
+                # Explicit ID was given but event not found — don't silently fall back
+                # to fuzzy search, which could match the wrong event
+                kind = "recurring event" if recurring_only else "event"
+                return None, [], f"I couldn't find that {kind} — it may have already been deleted."
         except ValueError:
             pass
 
@@ -936,8 +945,12 @@ def _get_prefs(user: User) -> dict:
 # ---------------------------------------------------------------------------
 
 def _event_context_tag(event_id: uuid.UUID, title: str, start_time: datetime, tz: ZoneInfo) -> str:
-    """Append a context tag to responses so the LLM can resolve follow-up references."""
-    return f"\n[ctx:event_id={event_id},title={title},time={start_time.astimezone(tz).isoformat()}]"
+    """Append a context tag to responses so the LLM can resolve follow-up references.
+
+    Uses JSON inside the tag to safely handle titles containing commas or brackets.
+    """
+    payload = json.dumps({"event_id": str(event_id), "title": title, "time": start_time.astimezone(tz).isoformat()})
+    return f"\n[ctx:{payload}]"
 
 
 def _user_tz(user: User) -> ZoneInfo:

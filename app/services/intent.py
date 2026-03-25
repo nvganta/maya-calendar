@@ -178,9 +178,9 @@ User: "Skip this week's standup"
 
 When the user says "cancel that", "make it 4pm", "add a reminder for it", etc., look at the
 most recent assistant message in conversation history. If it contains a context tag like
-[ctx:event_id=<uuid>,title=<title>,time=<iso>], use it:
+[ctx:{{"event_id":"<uuid>","title":"<title>","time":"<iso>"}}], extract the JSON and use it:
 
-- Set "target_event_id" to the UUID from the tag
+- Set "target_event_id" to the event_id from the tag
 - Set "target_event_query" to the title from the tag
 - Parse the user's actual intent (delete_event, update_event, create_reminder, etc.)
 
@@ -189,7 +189,7 @@ assistant message and use it as "target_event_query".
 
 Follow-up examples (assuming previous assistant message contained a context tag):
 
-Previous assistant: "Done! I've scheduled **Team Meeting** for Thu Mar 26, 3:00 – 4:00 PM.\\n[ctx:event_id=abc-123,title=Team Meeting,time=2026-03-26T15:00:00-05:00]"
+Previous assistant: "Done! I've scheduled **Team Meeting** for Thu Mar 26, 3:00 – 4:00 PM.\n[ctx:{{"event_id":"abc-123","title":"Team Meeting","time":"2026-03-26T15:00:00-05:00"}}]"
 
 User: "cancel that"
 {{"action": "delete_event", "target_event_id": "abc-123", "target_event_query": "Team Meeting"}}
