@@ -549,15 +549,15 @@ async def _search_events(intent: ParsedIntent, user: User, db: AsyncSession) -> 
     if not query:
         return "What would you like me to search for?"
 
-    # Build query conditions
+    # Build query conditions — search title, and tags on PG (ARRAY supports .any())
     safe_query = _escape_like(query)
-    conditions = [
-        Event.user_id == user.id,
-        or_(
-            Event.title.ilike(f"%{safe_query}%", escape="\\"),
-            Event.tags.any(query.lower()),
-        ),
-    ]
+    title_cond = Event.title.ilike(f"%{safe_query}%", escape="\\")
+    if hasattr(Event.tags.type, 'item_type'):
+        # PostgreSQL ARRAY column — can use .any() for element matching
+        conditions = [Event.user_id == user.id, or_(title_cond, Event.tags.any(query.lower()))]
+    else:
+        # Fallback (e.g. SQLite with JSON type) — title search only
+        conditions = [Event.user_id == user.id, title_cond]
 
     if intent.date_range_start and intent.date_range_end:
         conditions += [Event.start_time >= intent.date_range_start, Event.start_time <= intent.date_range_end]
@@ -692,10 +692,11 @@ async def _create_reminder(intent: ParsedIntent, user: User, db: AsyncSession) -
         if not intent.reminder_message:
             intent.reminder_message = linked_event.title
         if not intent.remind_at:
-            candidate = linked_event.start_time - timedelta(minutes=15)
+            event_start = linked_event.start_time if linked_event.start_time.tzinfo else linked_event.start_time.replace(tzinfo=timezone.utc)
+            candidate = event_start - timedelta(minutes=15)
             # If 15 min before is already in the past, fall back to event start time
             if candidate <= datetime.now(timezone.utc):
-                candidate = linked_event.start_time
+                candidate = event_start
             # If even the event start is in the past, don't save a dead reminder
             if candidate <= datetime.now(timezone.utc):
                 return f"**{linked_event.title}** has already passed — no reminder was set."
@@ -792,9 +793,13 @@ async def _get_events_in_range(
 
     output: list[tuple[datetime, datetime, str, str | None, str | None]] = []
 
+    def _ensure_aware(dt: datetime) -> datetime:
+        """Ensure datetime is tz-aware (SQLite strips tzinfo)."""
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
     for event in events:
         if not event.recurrence:
-            output.append((event.start_time, event.end_time, event.title, event.location, event.category))
+            output.append((_ensure_aware(event.start_time), _ensure_aware(event.end_time), event.title, event.location, event.category))
         else:
             duration = event.end_time - event.start_time
             cancelled = exceptions_by_event.get(event.id, set())
@@ -892,6 +897,9 @@ async def _suggest_alternative_slots(
 ) -> list[tuple[datetime, datetime]]:
     """Find up to `count` alternative slots near the requested time."""
     now = datetime.now(tz)
+    # Ensure requested_start is tz-aware for comparison
+    if requested_start.tzinfo is None:
+        requested_start = requested_start.replace(tzinfo=timezone.utc)
     search_start = max(requested_start - timedelta(days=1), now)
     search_end = requested_start + timedelta(days=7)
     min_mins = int(duration.total_seconds() / 60)
