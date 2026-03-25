@@ -18,7 +18,7 @@ class User(Base):
     working_hours_start: Mapped[int] = mapped_column(Integer, nullable=False, default=9)
     working_hours_end: Mapped[int] = mapped_column(Integer, nullable=False, default=18)
     # User preferences JSON: default_duration_minutes, buffer_minutes, no_meeting_before,
-    # preferred_meeting_start, preferred_meeting_end, custom_templates
+    # preferred_meeting_start, preferred_meeting_end, default_reminder_minutes, custom_templates
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

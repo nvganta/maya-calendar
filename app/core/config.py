@@ -6,13 +6,13 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
-    # Maya integration
-    MAYA_CLIENT_ID: str = ""
-    MAYA_CLIENT_SECRET: str = ""
+    # Maya integration (required — startup fails if missing to prevent auth bypass)
+    MAYA_CLIENT_ID: str
+    MAYA_CLIENT_SECRET: str
     MAYA_API_URL: str = "http://localhost:8000"
 
     # LLM
-    LLM_PROVIDER: str = "openai"  # "openai" or "anthropic"
+    LLM_PROVIDER: str = "openai"  # must be "openai" or "anthropic"
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 

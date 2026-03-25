@@ -113,6 +113,17 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     if not template:
         template = next((custom_templates[k] for k in custom_templates if k in title_lower), None)
 
+    # Normalize custom templates that use "duration" instead of "duration_minutes"
+    if template and "duration" in template and "duration_minutes" not in template:
+        template = {**template, "duration_minutes": template["duration"]}
+
+    # Apply default_hour from template when the LLM didn't provide an explicit time of day
+    # (i.e., intent.start_time has a midnight or very early hour, suggesting a date-only parse)
+    if template and "default_hour" in template and intent.start_time:
+        local_start = intent.start_time.astimezone(tz)
+        if local_start.hour == 0 and local_start.minute == 0:
+            intent.start_time = local_start.replace(hour=template["default_hour"]).astimezone(timezone.utc)
+
     # Determine duration — user LLM extraction > template > user pref > 1 hour default
     if intent.end_time:
         end_time = intent.end_time
@@ -144,6 +155,19 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     db.add(event)
     await db.commit()
 
+    # Auto-create reminder if user has default_reminder_minutes preference
+    default_reminder = prefs.get("default_reminder_minutes")
+    if default_reminder and not intent.is_all_day:
+        remind_at = intent.start_time - timedelta(minutes=default_reminder)
+        if remind_at > datetime.now(timezone.utc):
+            db.add(Reminder(
+                user_id=user.id,
+                event_id=event.id,
+                message=f"Upcoming: {intent.title}",
+                remind_at=remind_at,
+            ))
+            await db.commit()
+
     # Format response
     time_str = _format_time_range(intent.start_time, end_time, tz)
     location_str = f" at {intent.location}" if intent.location else ""
@@ -164,7 +188,7 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
             response += f"\n\nAlternative times that work:\n" + "\n".join(f"  • {a}" for a in alt_strs)
     else:
         # Back-to-back warning
-        btb = await _check_back_to_back(db, user.id, intent.start_time, end_time, tz)
+        btb = await _check_back_to_back(db, user, intent.start_time, end_time, tz)
         if btb:
             response += btb
 
@@ -266,9 +290,20 @@ async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
 
     if intent.start_time:
         duration = (event.end_time - event.start_time) if event.end_time else timedelta(hours=1)
-        event.start_time = intent.start_time
-        event.end_time = intent.end_time or (intent.start_time + duration)
+        new_start = intent.start_time
+        new_end = intent.end_time or (intent.start_time + duration)
+
+        # Check for conflicts at the new time (exclude the event itself)
+        conflicts = await _find_overlapping_events(db, user.id, new_start, new_end)
+        conflicts = [c for c in conflicts if c.id != event.id]
+
+        event.start_time = new_start
+        event.end_time = new_end
         changes.append(f"moved to {_format_time_range(event.start_time, event.end_time, tz)}")
+
+        if conflicts:
+            conflict_names = ", ".join(f"**{e.title}**" for e in conflicts)
+            changes.append(f"⚠️ overlaps with {conflict_names}")
     elif intent.end_time:
         event.end_time = intent.end_time
         changes.append(f"ends at {_format_time_short(event.end_time, tz)}")
@@ -282,7 +317,7 @@ async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
 
     if intent.recurrence_rule is not None:
         event.recurrence = intent.recurrence_rule
-        changes.append(f"recurrence → {_describe_rrule(intent.recurrence_rule)}")
+        changes.append(f"recurrence → {_describe_rrule(intent.recurrence_rule).strip()}")
 
     if intent.category is not None:
         event.category = intent.category
@@ -312,11 +347,12 @@ async def _delete_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
 
     event = matches[0]
     title = event.title
+    is_recurring = bool(event.recurrence)
     time_str = _format_time_range(event.start_time, event.end_time, tz)
     await db.delete(event)
     await db.commit()
 
-    if event.recurrence:
+    if is_recurring:
         return f"Done — cancelled **{title}** and all its future occurrences."
     return f"Done — **{title}** ({time_str}) has been cancelled."
 
@@ -333,7 +369,7 @@ async def _skip_occurrence(intent: ParsedIntent, user: User, db: AsyncSession) -
     if len(matches) > 1:
         lines = [f"Found {len(matches)} recurring events. Which one?\n"]
         for i, e in enumerate(matches[:5], 1):
-            lines.append(f"  {i}. **{e.title}** ({_describe_rrule(e.recurrence)})")
+            lines.append(f"  {i}. **{e.title}** ({_describe_rrule(e.recurrence).strip()})")
         return "\n".join(lines)
 
     event = matches[0]
@@ -386,11 +422,31 @@ async def _search_events(intent: ParsedIntent, user: User, db: AsyncSession) -> 
             return "You have no upcoming events on your calendar."
         return f"Your next event is **{event.title}** — {_format_time_range(event.start_time, event.end_time, tz)}."
 
+    # Count-all query with no search term — "how many events did I have last week?"
+    if not query and intent.is_count_query and intent.date_range_start and intent.date_range_end:
+        count_result = await db.execute(
+            select(func.count()).select_from(Event).where(and_(
+                Event.user_id == user.id,
+                Event.start_time >= intent.date_range_start,
+                Event.start_time <= intent.date_range_end,
+            ))
+        )
+        count = count_result.scalar()
+        period = _describe_period(intent.date_range_start, intent.date_range_end, tz)
+        return f"You had **{count}** event(s) {period}."
+
     if not query:
         return "What would you like me to search for?"
 
     # Build query conditions
-    conditions = [Event.user_id == user.id, Event.title.ilike(f"%{query}%")]
+    safe_query = _escape_like(query)
+    conditions = [
+        Event.user_id == user.id,
+        or_(
+            Event.title.ilike(f"%{safe_query}%", escape="\\"),
+            Event.tags.any(query.lower()),
+        ),
+    ]
 
     if intent.date_range_start and intent.date_range_end:
         conditions += [Event.start_time >= intent.date_range_start, Event.start_time <= intent.date_range_end]
@@ -555,14 +611,16 @@ async def _set_working_hours(intent: ParsedIntent, user: User, db: AsyncSession)
 async def _get_events_in_range(
     db: AsyncSession, user: User, start: datetime, end: datetime
 ) -> list[tuple[datetime, datetime, str, str | None, str | None]]:
-    """Return all (start, end, title, location, category) tuples in the range."""
+    """Return all (start, end, title, location, category) tuples in the range, expanding recurrences."""
     result = await db.execute(
         select(Event).where(
             and_(
                 Event.user_id == user.id,
                 or_(
                     and_(Event.recurrence.is_(None), Event.start_time < end, Event.end_time > start),
-                    Event.recurrence.isnot(None),
+                    # Recurring events: only load those whose base start_time is before range end
+                    # (an event created after the range can't have occurrences within it)
+                    and_(Event.recurrence.isnot(None), Event.start_time < end),
                 )
             )
         )
@@ -630,11 +688,19 @@ def _compute_free_slots(
         day_end = datetime(current_day.year, current_day.month, current_day.day,
                            user.working_hours_end, 0, 0, tzinfo=tz)
 
-        # Apply no_meeting_before preference
+        # Apply meeting window preferences
         no_before = prefs.get("no_meeting_before")
         if no_before is not None:
             day_start = max(day_start, datetime(current_day.year, current_day.month, current_day.day,
                                                  no_before, 0, 0, tzinfo=tz))
+        pref_start = prefs.get("preferred_meeting_start")
+        if pref_start is not None:
+            day_start = max(day_start, datetime(current_day.year, current_day.month, current_day.day,
+                                                 pref_start, 0, 0, tzinfo=tz))
+        pref_end = prefs.get("preferred_meeting_end")
+        if pref_end is not None:
+            day_end = min(day_end, datetime(current_day.year, current_day.month, current_day.day,
+                                             pref_end, 0, 0, tzinfo=tz))
 
         window_start = max(day_start, range_start)
         window_end = min(day_end, range_end)
@@ -676,7 +742,8 @@ async def _suggest_alternative_slots(
     count: int = 3,
 ) -> list[tuple[datetime, datetime]]:
     """Find up to `count` alternative slots near the requested time."""
-    search_start = requested_start - timedelta(days=1)
+    now = datetime.now(tz)
+    search_start = max(requested_start - timedelta(days=1), now)
     search_end = requested_start + timedelta(days=7)
     min_mins = int(duration.total_seconds() / 60)
 
@@ -697,34 +764,31 @@ async def _suggest_alternative_slots(
 
 
 async def _check_back_to_back(
-    db: AsyncSession, user_id: uuid.UUID, start: datetime, end: datetime, tz: ZoneInfo
+    db: AsyncSession, user: User, start: datetime, end: datetime, tz: ZoneInfo
 ) -> str:
-    """Return a warning string if the new event creates back-to-back meetings (< 5 min gap)."""
+    """Return a warning if the new event creates back-to-back meetings (< 5 min gap).
+
+    Uses _get_events_in_range to correctly handle recurring event occurrences.
+    The 30-minute search window finds nearby events; the 5-minute GAP triggers warnings.
+    """
     GAP = timedelta(minutes=5)
 
-    before_result = await db.execute(
-        select(Event).where(
-            and_(Event.user_id == user_id,
-                 Event.end_time > start - timedelta(minutes=30),
-                 Event.end_time <= start)
-        ).order_by(Event.end_time.desc()).limit(1)
-    )
-    before = before_result.scalars().first()
-
-    after_result = await db.execute(
-        select(Event).where(
-            and_(Event.user_id == user_id,
-                 Event.start_time >= end,
-                 Event.start_time < end + timedelta(minutes=30))
-        ).order_by(Event.start_time).limit(1)
-    )
-    after = after_result.scalars().first()
+    # Search a 30-min window around the event to find adjacent events (including recurring)
+    search_start = start - timedelta(minutes=30)
+    search_end = end + timedelta(minutes=30)
+    nearby = await _get_events_in_range(db, user, search_start, search_end)
 
     warnings = []
-    if before and (start - before.end_time) < GAP:
-        warnings.append(f"back-to-back after **{before.title}**")
-    if after and (after.start_time - end) < GAP:
-        warnings.append(f"back-to-back before **{after.title}**")
+    for (ev_start, ev_end, title, _, _) in nearby:
+        # Skip the event itself (exact time match)
+        if ev_start == start and ev_end == end:
+            continue
+        # Event ends just before our start
+        if ev_end <= start and (start - ev_end) < GAP:
+            warnings.append(f"back-to-back after **{title}**")
+        # Event starts just after our end
+        if ev_start >= end and (ev_start - end) < GAP:
+            warnings.append(f"back-to-back before **{title}**")
 
     if warnings:
         return f"\n\n⚠️ Heads up: {' and '.join(warnings)} with no break in between."
@@ -734,6 +798,10 @@ async def _check_back_to_back(
 # ---------------------------------------------------------------------------
 # Query helpers
 # ---------------------------------------------------------------------------
+
+def _escape_like(query: str) -> str:
+    """Escape SQL LIKE metacharacters so they are treated as literals."""
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 async def _find_overlapping_events(
     db: AsyncSession, user_id: uuid.UUID, start: datetime, end: datetime
@@ -753,7 +821,8 @@ async def _find_events_by_query(
     recurring_only: bool = False,
 ) -> list[Event]:
     now = datetime.now(timezone.utc)
-    conditions = [Event.user_id == user_id, Event.title.ilike(f"%{query}%")]
+    safe_query = _escape_like(query)
+    conditions = [Event.user_id == user_id, Event.title.ilike(f"%{safe_query}%", escape="\\")]
     if recurring_only:
         conditions.append(Event.recurrence.isnot(None))
     result = await db.execute(

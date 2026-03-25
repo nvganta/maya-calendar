@@ -203,8 +203,10 @@ async def parse_intent(
     try:
         if settings.LLM_PROVIDER == "openai":
             response_text = await _call_openai(system, messages, settings.OPENAI_API_KEY)
-        else:
+        elif settings.LLM_PROVIDER == "anthropic":
             response_text = await _call_anthropic(system, messages, settings.ANTHROPIC_API_KEY)
+        else:
+            raise ValueError(f"Unknown LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Must be 'openai' or 'anthropic'.")
 
         response_text = _strip_code_fences(response_text)
         data = json.loads(response_text)
@@ -219,6 +221,9 @@ async def parse_intent(
     except (ValueError, KeyError) as e:
         logger.warning(f"Intent parsing failed: {e}")
         return ParsedIntent(action="unknown", raw_message=message)
+    except Exception as e:
+        logger.exception(f"Intent parsing infrastructure error: {e}")
+        raise
 
 
 def _strip_code_fences(text: str) -> str:
@@ -252,7 +257,7 @@ def _fallback_parse(message: str, tz: ZoneInfo) -> ParsedIntent:
 
 async def _call_openai(system: str, messages: list[dict], api_key: str) -> str:
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=api_key)
+    client = AsyncOpenAI(api_key=api_key, timeout=15.0)
     response = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "system", "content": system}] + messages,
@@ -265,7 +270,7 @@ async def _call_openai(system: str, messages: list[dict], api_key: str) -> str:
 
 async def _call_anthropic(system: str, messages: list[dict], api_key: str) -> str:
     from anthropic import AsyncAnthropic
-    client = AsyncAnthropic(api_key=api_key)
+    client = AsyncAnthropic(api_key=api_key, timeout=15.0)
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         system=system,

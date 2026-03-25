@@ -30,9 +30,6 @@ def _convert_pg_types(inspector, table, column_info):
         column_info["type"] = JSON()
 
 
-# Override ARRAY columns for table creation in SQLite
-_original_array_init = ARRAY.__init__
-
 # --- Engine + Session ---
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -43,25 +40,28 @@ async def db_session():
     """Create a fresh in-memory database for each test."""
     engine = create_async_engine(TEST_DB_URL, echo=False)
 
-    # For SQLite: override PG-specific column types before creating tables
-    # We swap ARRAY -> JSON at the DDL level
+    # For SQLite: temporarily override PG-specific column types for DDL creation
+    # We swap ARRAY -> JSON at the DDL level, then restore after table creation
     from app.models.event import Event as EventModel
     tags_col = EventModel.__table__.c.tags
+    original_type = tags_col.type
     if hasattr(tags_col.type, 'item_type'):
-        # This is a PG ARRAY — swap to JSON for SQLite
         tags_col.type = JSON()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    async with session_factory() as session:
-        yield session
+        async with session_factory() as session:
+            yield session
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+    finally:
+        tags_col.type = original_type
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture

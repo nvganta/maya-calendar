@@ -34,8 +34,8 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_recur_exceptions_event_date', 'recurring_event_exceptions', ['event_id', 'exception_date'], unique=False)
-    op.add_column('users', sa.Column('working_hours_start', sa.Integer(), nullable=False))
-    op.add_column('users', sa.Column('working_hours_end', sa.Integer(), nullable=False))
+    op.add_column('users', sa.Column('working_hours_start', sa.Integer(), nullable=False, server_default='9'))
+    op.add_column('users', sa.Column('working_hours_end', sa.Integer(), nullable=False, server_default='18'))
     # ### end Alembic commands ###
 
 

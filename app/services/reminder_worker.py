@@ -57,16 +57,18 @@ async def _process_due_reminders() -> None:
         logger.info(f"Firing {len(rows)} due reminder(s).")
 
         for reminder, user in rows:
-            await _deliver_reminder(reminder, user, settings)
-            reminder.is_sent = True
+            delivered = await _deliver_reminder(reminder, user, settings)
+            if delivered:
+                reminder.is_sent = True
 
         await db.commit()
 
 
-async def _deliver_reminder(reminder: Reminder, user: User, settings) -> None:
+async def _deliver_reminder(reminder: Reminder, user: User, settings) -> bool:
     """
     Deliver a reminder. Attempts to push via Maya's API if credentials are set.
     Falls back to logging if Maya credentials aren't configured yet.
+    Returns True if delivery succeeded (or no push was attempted), False on failure.
     """
     logger.info(
         f"REMINDER [{user.email}]: {reminder.message} "
@@ -79,6 +81,9 @@ async def _deliver_reminder(reminder: Reminder, user: User, settings) -> None:
             await _push_to_maya(reminder, user, settings)
         except Exception as e:
             logger.warning(f"Could not push reminder to Maya: {e}")
+            return False
+
+    return True
 
 
 async def _push_to_maya(reminder: Reminder, user: User, settings) -> None:
@@ -88,13 +93,15 @@ async def _push_to_maya(reminder: Reminder, user: User, settings) -> None:
     """
     import hashlib
     import hmac
+    import json
     import time
 
     timestamp = str(int(time.time()))
-    body = f'{{"maya_user_id": {user.maya_user_id}, "message": "{reminder.message}"}}'
+    # Serialize once — same bytes used for both HMAC and request body.
+    body = json.dumps({"maya_user_id": user.maya_user_id, "message": reminder.message}, separators=(",", ":"))
     message = f"{timestamp}.{body}"
     signature = hmac.new(
-        settings.MAYA_CLIENT_ID.encode(),
+        settings.MAYA_CLIENT_SECRET.encode(),
         message.encode(),
         hashlib.sha256,
     ).hexdigest()
@@ -102,8 +109,9 @@ async def _push_to_maya(reminder: Reminder, user: User, settings) -> None:
     async with httpx.AsyncClient(timeout=10.0) as client:
         await client.post(
             f"{settings.MAYA_API_URL}/api/agents/notify",
-            json={"maya_user_id": user.maya_user_id, "message": reminder.message},
+            content=body.encode(),
             headers={
+                "Content-Type": "application/json",
                 "X-Maya-Client-ID": settings.MAYA_CLIENT_ID,
                 "X-Maya-Signature": signature,
                 "X-Maya-Timestamp": timestamp,
