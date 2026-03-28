@@ -11,7 +11,6 @@ import uuid
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,37 +47,46 @@ async def _get_user_by_id(user_id: str, db: AsyncSession) -> User:
 async def google_auth_url(user_id: str = Query(..., description="Internal user UUID")):
     """Generate the Google OAuth consent screen URL.
 
-    The user_id is passed as the OAuth 'state' parameter so we know
-    which user to associate the tokens with on callback.
+    The user_id is embedded in a signed state token (with nonce + timestamp)
+    to prevent CSRF attacks on the callback.
     """
     if not _google_configured():
         raise HTTPException(status_code=503, detail="Google Calendar sync is not configured")
 
-    url = google_auth.get_auth_url(state=user_id)
+    url = google_auth.get_auth_url(user_id=user_id)
     return {"auth_url": url}
 
 
 @router.get("/callback")
 async def google_callback(
-    code: str = Query(...),
+    code: str | None = Query(default=None),
     state: str = Query(...),
+    error: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    """OAuth callback — Google redirects here after user grants access.
+    """OAuth callback — Google redirects here after user grants (or denies) access.
 
-    Exchanges the authorization code for tokens and stores them.
-    The 'state' parameter contains the user ID.
+    The 'state' parameter is a signed token containing the user ID.
     """
-    user = await _get_user_by_id(state, db)
+    # Handle user-denied or other Google errors
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google authorization denied: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+
+    # Verify signed state token (CSRF protection)
+    user_id = google_auth._verify_state(state)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired authorization state")
+
+    user = await _get_user_by_id(user_id, db)
 
     try:
         token_row = await google_auth.handle_callback(code, user, db)
     except Exception as e:
-        logger.error(f"Google OAuth callback failed: {e}")
-        raise HTTPException(status_code=400, detail=f"OAuth failed: {e}")
+        logger.error(f"Google OAuth callback failed for user {user_id}: {e}")
+        raise HTTPException(status_code=400, detail="Failed to complete Google authorization. Please try again.")
 
-    # In production, redirect to the frontend with a success indicator
-    # For now, return JSON
     return {
         "status": "connected",
         "google_email": token_row.google_email,

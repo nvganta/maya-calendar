@@ -8,7 +8,12 @@ Flow:
 4. disconnect(user) → revokes token and removes from DB
 """
 
+import asyncio
+import hashlib
+import hmac
 import logging
+import secrets
+import time
 from datetime import datetime, timezone
 
 from google.oauth2.credentials import Credentials
@@ -23,6 +28,9 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+
+# State token validity window (10 minutes)
+STATE_MAX_AGE_SECONDS = 600
 
 
 def _build_flow() -> Flow:
@@ -44,13 +52,54 @@ def _build_flow() -> Flow:
     return flow
 
 
-def get_auth_url(state: str | None = None) -> str:
+def _sign_state(user_id: str) -> str:
+    """Create a signed, timestamped state token to prevent CSRF.
+
+    Format: user_id.timestamp.nonce.signature
+    Signature = HMAC-SHA256(MAYA_CLIENT_SECRET, user_id.timestamp.nonce)
+    """
+    settings = get_settings()
+    ts = str(int(time.time()))
+    nonce = secrets.token_hex(8)
+    message = f"{user_id}.{ts}.{nonce}"
+    sig = hmac.new(settings.MAYA_CLIENT_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return f"{message}.{sig}"
+
+
+def _verify_state(state: str) -> str | None:
+    """Verify a signed state token and return the user_id, or None if invalid."""
+    parts = state.split(".")
+    if len(parts) != 4:
+        return None
+    user_id, ts, nonce, sig = parts
+
+    # Check timestamp freshness
+    try:
+        if abs(time.time() - int(ts)) > STATE_MAX_AGE_SECONDS:
+            logger.warning("OAuth state token expired")
+            return None
+    except ValueError:
+        return None
+
+    # Verify signature
+    settings = get_settings()
+    message = f"{user_id}.{ts}.{nonce}"
+    expected = hmac.new(settings.MAYA_CLIENT_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        logger.warning("OAuth state signature mismatch — possible CSRF")
+        return None
+
+    return user_id
+
+
+def get_auth_url(user_id: str) -> str:
     """Generate the Google OAuth consent screen URL.
 
-    Args:
-        state: Opaque string passed through the OAuth flow (e.g. user ID).
+    The state parameter is a signed token containing the user ID,
+    a timestamp, and a nonce to prevent CSRF attacks.
     """
     flow = _build_flow()
+    state = _sign_state(user_id)
     auth_url, _ = flow.authorization_url(
         access_type="offline",  # request refresh_token
         include_granted_scopes="true",
@@ -69,7 +118,8 @@ async def handle_callback(
     encrypts tokens before they hit the database.
     """
     flow = _build_flow()
-    flow.fetch_token(code=code)
+    # Offload sync HTTP call to thread pool to avoid blocking the event loop
+    await asyncio.to_thread(flow.fetch_token, code=code)
     creds = flow.credentials
 
     # Check for existing token (reconnecting)
@@ -84,6 +134,8 @@ async def handle_callback(
         token_row.token_expires_at = creds.expiry.replace(tzinfo=timezone.utc) if creds.expiry else None
         token_row.scopes = " ".join(creds.scopes or SCOPES)
     else:
+        if not creds.refresh_token:
+            logger.warning(f"No refresh token received for user {user.id} — token will stop working when access token expires")
         token_row = GoogleOAuthToken(
             user_id=user.id,
             access_token=creds.token,
@@ -129,7 +181,8 @@ async def get_valid_credentials(user: User, db: AsyncSession) -> Credentials | N
             return None
         try:
             from google.auth.transport.requests import Request
-            creds.refresh(Request())
+            # Offload sync HTTP call to thread pool
+            await asyncio.to_thread(creds.refresh, Request())
             # Update stored tokens
             token_row.access_token = creds.token
             token_row.token_expires_at = creds.expiry.replace(tzinfo=timezone.utc) if creds.expiry else None
