@@ -30,3 +30,4 @@ class User(Base):
     # Relationships
     events: Mapped[list["Event"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # noqa: F821
     reminders: Mapped[list["Reminder"]] = relationship(back_populates="user", cascade="all, delete-orphan")  # noqa: F821
+    google_oauth_token: Mapped["GoogleOAuthToken | None"] = relationship(back_populates="user", cascade="all, delete-orphan", uselist=False)  # noqa: F821

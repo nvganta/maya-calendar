@@ -12,7 +12,7 @@ load_dotenv()
 
 # Import models so Alembic can detect them
 from app.core.database import Base
-from app.models import User, Event, Reminder  # noqa: F401
+from app.models import User, Event, Reminder, GoogleOAuthToken, ExternalEventMapping, SyncQueueItem  # noqa: F401
 
 config = context.config
 

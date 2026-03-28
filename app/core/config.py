@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
+    # Google Calendar OAuth (optional — sync disabled if not set)
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8001/api/google/callback"
+
+    # Token encryption key for OAuth tokens at rest (Fernet key, base64-encoded 32 bytes)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    TOKEN_ENCRYPTION_KEY: str = ""
+
     # App
     APP_NAME: str = "Maya Calendar Agent"
     DEBUG: bool = False

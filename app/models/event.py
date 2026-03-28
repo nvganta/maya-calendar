@@ -38,3 +38,4 @@ class Event(Base):
     user: Mapped["User"] = relationship(back_populates="events")  # noqa: F821
     reminders: Mapped[list["Reminder"]] = relationship(back_populates="event", cascade="all, delete-orphan")  # noqa: F821
     exceptions: Mapped[list["RecurringEventException"]] = relationship(back_populates="event", cascade="all, delete-orphan")  # noqa: F821
+    external_mappings: Mapped[list["ExternalEventMapping"]] = relationship(back_populates="event", cascade="all, delete-orphan")  # noqa: F821
