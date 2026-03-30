@@ -27,7 +27,8 @@ class ParsedIntent(BaseModel):
     """Structured output from intent parsing."""
     action: str  # create_event, list_events, check_availability, update_event, delete_event,
                  # create_reminder, list_reminders, find_free_slots, skip_occurrence,
-                 # set_working_hours, search_events, set_preference, daily_digest, unknown
+                 # set_working_hours, search_events, set_preference, daily_digest,
+                 # google_calendar, unknown
     title: str | None = None
     description: str | None = None
     start_time: datetime | None = None
@@ -96,6 +97,7 @@ User's timezone: {user_timezone}
 - search_events        ← "when did I last meet with Sarah?", "what's my next event?", "how many meetings last week?"
 - set_preference       ← "I prefer meetings in the afternoon", "add 15 min buffer between meetings", "default events to 30 minutes"
 - daily_digest         ← "what does my day look like?", "what about tomorrow?", "how's my week?", "give me a rundown of today"
+- google_calendar      ← "connect Google Calendar", "import my Google Calendar", "sync my calendar", "disconnect Google", "Google Calendar status"
 - unknown
 
 **IMPORTANT datetime rules:**
@@ -183,6 +185,18 @@ User: "My working hours are 9am to 6pm"
 
 User: "Skip this week's standup"
 {{"action": "skip_occurrence", "target_event_query": "standup", "skip_occurrence_date": "2026-03-16T10:00:00-05:00"}}
+
+User: "Connect my Google Calendar"
+{{"action": "google_calendar"}}
+
+User: "Import my Google Calendar events"
+{{"action": "google_calendar"}}
+
+User: "Disconnect Google Calendar"
+{{"action": "google_calendar"}}
+
+User: "Is my Google Calendar connected?"
+{{"action": "google_calendar"}}
 
 **FOLLOW-UP REFERENCES — resolving "it", "that", "the meeting":**
 
