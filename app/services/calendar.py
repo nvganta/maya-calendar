@@ -19,6 +19,8 @@ from app.models.user import User
 from app.models.event import Event
 from app.models.reminder import Reminder
 from app.models.recurring_exception import RecurringEventException
+from app.models.external_event_mapping import ExternalEventMapping
+from app.models.sync_queue_item import SyncQueueItem
 from app.services.intent import ParsedIntent, DEFAULT_TIMEZONE
 
 
@@ -169,6 +171,9 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
                 remind_at=remind_at,
             ))
             await db.commit()
+
+    # Queue Google sync if enabled
+    await _queue_google_sync(db, user, "create", event_id=event.id)
 
     # Format response
     time_str = _format_time_range(intent.start_time, end_time, tz)
@@ -432,6 +437,7 @@ async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
         return f"Found **{event.title}** but I'm not sure what to change. What would you like to update?"
 
     await db.commit()
+    await _queue_google_sync(db, user, "update", event_id=event.id)
     response = f"Updated **{event.title}** — {', '.join(changes)}."
     response += _event_context_tag(event.id, event.title, event.start_time, tz)
     return response
@@ -456,8 +462,16 @@ async def _delete_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
     title = event.title
     is_recurring = bool(event.recurrence)
     time_str = _format_time_range(event.start_time, event.end_time, tz)
+
+    # Capture external ID before deleting (mapping cascades with event)
+    ext_id = await _get_external_event_id(db, event.id)
+
     await db.delete(event)
     await db.commit()
+
+    # Queue Google delete if we had a mapping
+    if ext_id:
+        await _queue_google_sync(db, user, "delete", external_event_id=ext_id)
 
     if is_recurring:
         return f"Done — cancelled **{title}** and all its future occurrences."
@@ -950,6 +964,46 @@ async def _check_back_to_back(
     if warnings:
         return f"\n\n⚠️ Heads up: {' and '.join(warnings)} with no break in between."
     return ""
+
+
+# ---------------------------------------------------------------------------
+# Google sync hooks
+# ---------------------------------------------------------------------------
+
+async def _queue_google_sync(
+    db: AsyncSession, user: User, action: str,
+    event_id: uuid.UUID | None = None,
+    external_event_id: str | None = None,
+) -> None:
+    """Queue a sync item if the user has Google Calendar connected.
+
+    No-op if user hasn't connected Google or sync isn't enabled.
+    """
+    prefs = user.preferences or {}
+    if not prefs.get("google_sync_enabled", False):
+        return
+
+    db.add(SyncQueueItem(
+        user_id=user.id,
+        action=action,
+        event_id=event_id,
+        external_event_id=external_event_id,
+        external_provider="google",
+        status="pending",
+    ))
+    await db.commit()
+
+
+async def _get_external_event_id(db: AsyncSession, event_id: uuid.UUID) -> str | None:
+    """Look up the Google event ID for a local event (needed before deleting)."""
+    result = await db.execute(
+        select(ExternalEventMapping.external_event_id).where(and_(
+            ExternalEventMapping.internal_event_id == event_id,
+            ExternalEventMapping.external_provider == "google",
+        ))
+    )
+    row = result.scalar_one_or_none()
+    return row
 
 
 # ---------------------------------------------------------------------------
