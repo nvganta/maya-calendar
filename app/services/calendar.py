@@ -77,6 +77,7 @@ async def handle_calendar_action(intent: ParsedIntent, user: User, db: AsyncSess
         "search_events":    _search_events,
         "set_preference":   _set_preference,
         "daily_digest":     _daily_digest,
+        "google_calendar":  _google_calendar,
     }
 
     handler = handlers.get(intent.action)
@@ -91,7 +92,8 @@ async def handle_calendar_action(intent: ParsedIntent, user: User, db: AsyncSess
             "- **Preferences** — \"Default events to 30 minutes\" / \"Add 15-min buffer\"\n"
             "- **Update/Cancel** — \"Move the standup to 11am\" / \"Cancel Friday's meeting\"\n"
             "- **Reminders** — \"Remind me to call John at 5pm\"\n"
-            "- **Digest** — \"What does my day look like?\" / \"How's my week?\""
+            "- **Digest** — \"What does my day look like?\" / \"How's my week?\"\n"
+            "- **Google Calendar** — \"Connect Google Calendar\" / \"Import my Google Calendar\""
         )
 
     return await handler(intent, user, db)
@@ -680,6 +682,116 @@ async def _set_preference(intent: ParsedIntent, user: User, db: AsyncSession) ->
     user.preferences = prefs
     await db.commit()
     return msg
+
+
+# ---------------------------------------------------------------------------
+# Google Calendar integration
+# ---------------------------------------------------------------------------
+
+async def _google_calendar(intent: ParsedIntent, user: User, db: AsyncSession) -> str:
+    """Handle Google Calendar connect/disconnect/import/status requests.
+
+    Interprets the user's raw message to determine the sub-action.
+    """
+    from app.core.config import get_settings
+    from app.services import google_auth
+
+    settings = get_settings()
+    msg = intent.raw_message.lower()
+
+    # Check if Google OAuth is configured at all
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        return "Google Calendar sync isn't configured on this server yet. Please contact the administrator."
+
+    # Disconnect
+    if "disconnect" in msg or "unlink" in msg or "remove google" in msg:
+        disconnected = await google_auth.disconnect(user, db)
+        if disconnected:
+            # Clear sync preferences
+            prefs = (user.preferences or {}).copy()
+            prefs.pop("google_sync_enabled", None)
+            prefs.pop("google_sync_token", None)
+            prefs.pop("google_calendar_id", None)
+            user.preferences = prefs
+            await db.commit()
+            return "Google Calendar disconnected. Your local events are still here — only the sync link has been removed."
+        return "Your Google Calendar isn't connected."
+
+    # Status check
+    if "status" in msg or "connected" in msg or "is my" in msg:
+        status = await google_auth.get_connection_status(user, db)
+        if status["connected"]:
+            email = status.get("google_email") or "your Google account"
+            return f"Google Calendar is connected ({email}). Sync is {'enabled' if (user.preferences or {}).get('google_sync_enabled') else 'not yet enabled — say \"sync my calendar\" to start'}."
+        return "Google Calendar is not connected. Say \"connect Google Calendar\" to get started."
+
+    # Connect or import — check if already connected
+    status = await google_auth.get_connection_status(user, db)
+
+    if not status["connected"]:
+        # Generate auth URL
+        auth_url = google_auth.get_auth_url(user_id=str(user.id))
+        return (
+            "To connect Google Calendar, please open this link and grant access:\n\n"
+            f"{auth_url}\n\n"
+            "Once you've authorized, your calendars will be linked!"
+        )
+
+    # Already connected — handle import/sync
+    if "import" in msg or "sync" in msg or "pull" in msg:
+        creds = await google_auth.get_valid_credentials(user, db)
+        if not creds:
+            auth_url = google_auth.get_auth_url(user_id=str(user.id))
+            return f"Your Google token has expired. Please re-authorize:\n\n{auth_url}"
+
+        prefs = (user.preferences or {}).copy()
+        was_already_enabled = prefs.get("google_sync_enabled", False)
+        sync_token = prefs.get("google_sync_token")
+
+        # Trigger a pull
+        try:
+            from app.services import google_sync
+            result, new_token = await google_sync.pull_from_google(
+                user, creds, db, sync_token=sync_token,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Google Calendar sync failed for user {user.id}: {e}")
+            return "Something went wrong syncing with Google Calendar. Please try again in a few minutes."
+
+        # Sync succeeded — enable sync + store token in a single commit
+        if not was_already_enabled:
+            prefs["google_sync_enabled"] = True
+        if new_token:
+            prefs["google_sync_token"] = new_token
+        user.preferences = prefs
+        await db.commit()
+
+        parts = []
+        if result.pulled:
+            parts.append(f"**{result.pulled}** event(s) imported")
+        if result.deleted:
+            parts.append(f"**{result.deleted}** cancelled event(s) removed")
+        if result.errors:
+            parts.append(f"{len(result.errors)} error(s)")
+
+        if parts:
+            response = f"Google Calendar synced! {', '.join(parts)}."
+        else:
+            response = "Google Calendar synced — everything is already up to date!"
+
+        if not was_already_enabled:
+            response += "\n\nSync is now enabled. New events you create here will automatically appear in Google Calendar, and changes in Google will sync back."
+        return response
+
+    # Default: explain what they can do
+    email = status.get("google_email") or "your Google account"
+    return (
+        f"Your Google Calendar is connected ({email}). You can:\n"
+        "- **\"Import my Google Calendar\"** — pull events from Google\n"
+        "- **\"Disconnect Google Calendar\"** — unlink your account\n"
+        "- **\"Google Calendar status\"** — check connection info"
+    )
 
 
 # ---------------------------------------------------------------------------
