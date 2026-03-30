@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     TOKEN_ENCRYPTION_KEY: str = ""
 
+    # JWT for frontend sessions (issued after SSO validation)
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRY_MINUTES: int = 1440  # 24 hours
+
     # App
     APP_NAME: str = "Maya Calendar Agent"
     DEBUG: bool = False
