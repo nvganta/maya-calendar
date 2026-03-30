@@ -744,26 +744,28 @@ async def _google_calendar(intent: ParsedIntent, user: User, db: AsyncSession) -
             auth_url = google_auth.get_auth_url(user_id=str(user.id))
             return f"Your Google token has expired. Please re-authorize:\n\n{auth_url}"
 
-        # Enable sync if not already
         prefs = (user.preferences or {}).copy()
-        if not prefs.get("google_sync_enabled"):
-            prefs["google_sync_enabled"] = True
-            user.preferences = prefs
-            await db.commit()
+        was_already_enabled = prefs.get("google_sync_enabled", False)
+        sync_token = prefs.get("google_sync_token")
 
         # Trigger a pull
-        from app.services import google_sync
-        sync_token = prefs.get("google_sync_token")
-        result, new_token = await google_sync.pull_from_google(
-            user, creds, db, sync_token=sync_token,
-        )
+        try:
+            from app.services import google_sync
+            result, new_token = await google_sync.pull_from_google(
+                user, creds, db, sync_token=sync_token,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Google Calendar sync failed for user {user.id}: {e}")
+            return "Something went wrong syncing with Google Calendar. Please try again in a few minutes."
 
-        # Store new sync token
+        # Sync succeeded — enable sync + store token in a single commit
+        if not was_already_enabled:
+            prefs["google_sync_enabled"] = True
         if new_token:
-            prefs = (user.preferences or {}).copy()
             prefs["google_sync_token"] = new_token
-            user.preferences = prefs
-            await db.commit()
+        user.preferences = prefs
+        await db.commit()
 
         parts = []
         if result.pulled:
@@ -778,7 +780,8 @@ async def _google_calendar(intent: ParsedIntent, user: User, db: AsyncSession) -
         else:
             response = "Google Calendar synced — everything is already up to date!"
 
-        response += "\n\nSync is now enabled. New events you create here will automatically appear in Google Calendar, and changes in Google will sync back."
+        if not was_already_enabled:
+            response += "\n\nSync is now enabled. New events you create here will automatically appear in Google Calendar, and changes in Google will sync back."
         return response
 
     # Default: explain what they can do
