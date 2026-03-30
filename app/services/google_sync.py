@@ -12,9 +12,9 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,7 +47,7 @@ def _build_calendar_service(creds: Credentials):
 # Field mapping: Google Calendar event ↔ local Event
 # ---------------------------------------------------------------------------
 
-def _google_event_to_local(g_event: dict, user: User) -> dict:
+def _google_event_to_local(g_event: dict) -> dict:
     """Convert a Google Calendar event dict to local Event field dict.
 
     Returns a dict of fields suitable for Event(**fields) or updating an existing Event.
@@ -94,9 +94,13 @@ def _google_event_to_local(g_event: dict, user: User) -> dict:
     }
 
 
-def _local_event_to_google(event: Event) -> dict:
-    """Convert a local Event to a Google Calendar API event body."""
-    tz_name = "UTC"
+def _local_event_to_google(event: Event, user_timezone: str | None = None) -> dict:
+    """Convert a local Event to a Google Calendar API event body.
+
+    Uses user_timezone for the timeZone field so recurring events anchor
+    to the correct wall-clock time across DST boundaries.
+    """
+    tz_name = user_timezone or "UTC"
 
     if event.is_all_day:
         body = {
@@ -169,72 +173,76 @@ async def pull_from_google(
             else:
                 new_sync_token = response.get("nextSyncToken")
                 break
-    except Exception as e:
-        error_str = str(e)
-        # If syncToken is invalid (e.g. expired), fall back to full sync
-        if "410" in error_str and sync_token:
+    except HttpError as e:
+        # If syncToken is invalid (expired), fall back to full sync
+        if e.resp.status == 410 and sync_token:
             logger.warning(f"Sync token expired for user {user.id}, falling back to full sync")
             return await pull_from_google(user, creds, db, calendar_id, sync_token=None)
         logger.error(f"Failed to list Google events for user {user.id}: {e}")
-        result.errors.append(f"Failed to fetch events: {e}")
+        result.errors.append(f"Failed to fetch events: {e.reason if hasattr(e, 'reason') else e}")
+        return result, sync_token
+    except Exception as e:
+        logger.error(f"Failed to list Google events for user {user.id}: {e}")
+        result.errors.append(f"Failed to fetch events")
         return result, sync_token
 
-    # Process each Google event
+    # Process each Google event — use savepoints to isolate individual failures
     for g_event in all_google_events:
         try:
-            google_event_id = g_event["id"]
-            status = g_event.get("status", "confirmed")
+            async with db.begin_nested():
+                google_event_id = g_event["id"]
+                status = g_event.get("status", "confirmed")
 
-            # Look up existing mapping
-            mapping_result = await db.execute(
-                select(ExternalEventMapping).where(and_(
-                    ExternalEventMapping.external_provider == PROVIDER,
-                    ExternalEventMapping.external_event_id == google_event_id,
-                ))
-            )
-            mapping = mapping_result.scalar_one_or_none()
+                # Look up existing mapping
+                mapping_result = await db.execute(
+                    select(ExternalEventMapping).where(and_(
+                        ExternalEventMapping.external_provider == PROVIDER,
+                        ExternalEventMapping.external_event_id == google_event_id,
+                    ))
+                )
+                mapping = mapping_result.scalar_one_or_none()
 
-            if status == "cancelled":
-                # Event was deleted in Google — delete locally if we have it
+                if status == "cancelled":
+                    # Event was deleted in Google — delete locally if we have it
+                    if mapping:
+                        event_result = await db.execute(
+                            select(Event).where(Event.id == mapping.internal_event_id)
+                        )
+                        event = event_result.scalar_one_or_none()
+                        if event:
+                            await db.delete(event)
+                            result.deleted += 1
+                        # Mapping cascades on event delete
+                    continue
+
+                # Convert Google event to local fields
+                fields = _google_event_to_local(g_event)
+                if not fields:
+                    continue
+
                 if mapping:
+                    # Update existing local event
                     event_result = await db.execute(
                         select(Event).where(Event.id == mapping.internal_event_id)
                     )
                     event = event_result.scalar_one_or_none()
                     if event:
-                        await db.delete(event)
-                        result.deleted += 1
-                    # Mapping cascades on event delete
-                continue
-
-            # Convert Google event to local fields
-            fields = _google_event_to_local(g_event, user)
-            if not fields:
-                continue
-
-            if mapping:
-                # Update existing local event
-                event_result = await db.execute(
-                    select(Event).where(Event.id == mapping.internal_event_id)
-                )
-                event = event_result.scalar_one_or_none()
-                if event:
-                    for key, value in fields.items():
-                        setattr(event, key, value)
-                    mapping.last_synced_at = datetime.now(timezone.utc)
+                        for key, value in fields.items():
+                            setattr(event, key, value)
+                        mapping.last_synced_at = datetime.now(timezone.utc)
+                        result.pulled += 1
+                else:
+                    # Create new local event from Google
+                    event = Event(user_id=user.id, **fields)
+                    db.add(event)
+                    await db.flush()  # get event.id before creating mapping
+                    db.add(ExternalEventMapping(
+                        internal_event_id=event.id,
+                        external_provider=PROVIDER,
+                        external_event_id=google_event_id,
+                        external_calendar_id=calendar_id,
+                    ))
                     result.pulled += 1
-            else:
-                # Create new local event from Google
-                event = Event(user_id=user.id, **fields)
-                db.add(event)
-                await db.flush()  # get event.id before creating mapping
-                db.add(ExternalEventMapping(
-                    internal_event_id=event.id,
-                    external_provider=PROVIDER,
-                    external_event_id=google_event_id,
-                    external_calendar_id=calendar_id,
-                ))
-                result.pulled += 1
 
         except Exception as e:
             logger.warning(f"Failed to process Google event {g_event.get('id', '?')}: {e}")
@@ -261,7 +269,7 @@ async def push_event_to_google(
     Returns the Google event ID on success, None on failure.
     """
     service = _build_calendar_service(creds)
-    body = _local_event_to_google(event)
+    body = _local_event_to_google(event, user_timezone=user.timezone)
 
     # Check if this event already has a Google mapping
     mapping_result = await db.execute(
@@ -329,11 +337,13 @@ async def delete_from_google(
         )
         logger.info(f"Deleted Google event {external_event_id}")
         return True
-    except Exception as e:
-        error_str = str(e)
+    except HttpError as e:
         # 404/410 = already deleted on Google side — not an error
-        if "404" in error_str or "410" in error_str:
+        if e.resp.status in (404, 410):
             logger.info(f"Google event {external_event_id} already deleted")
             return True
+        logger.error(f"Failed to delete Google event {external_event_id}: {e}")
+        return False
+    except Exception as e:
         logger.error(f"Failed to delete Google event {external_event_id}: {e}")
         return False
