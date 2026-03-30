@@ -66,27 +66,36 @@ async def validate_sso(
         raise HTTPException(status_code=401, detail="Invalid or expired SSO token")
 
     maya_data = response.json()
-    maya_user_id = maya_data.get("user_id") or maya_data.get("maya_user_id")
+    raw_id = maya_data.get("user_id")
+    maya_user_id = raw_id if raw_id is not None else maya_data.get("maya_user_id")
     email = maya_data.get("email", "")
     name = maya_data.get("name", "")
 
-    if not maya_user_id:
+    if maya_user_id is None:
         raise HTTPException(status_code=401, detail="Invalid SSO response from Maya")
 
-    # Find or create local user
-    result = await db.execute(select(User).where(User.maya_user_id == int(maya_user_id)))
+    try:
+        maya_user_id_int = int(maya_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid SSO response from Maya")
+
+    # Find or create local user (handle race condition on concurrent SSO)
+    from sqlalchemy.exc import IntegrityError
+
+    result = await db.execute(select(User).where(User.maya_user_id == maya_user_id_int))
     user = result.scalar_one_or_none()
 
     if not user:
-        user = User(
-            maya_user_id=int(maya_user_id),
-            email=email,
-            name=name,
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-        logger.info(f"Created user from SSO: {user.id} (maya_user_id={maya_user_id})")
+        try:
+            user = User(maya_user_id=maya_user_id_int, email=email, name=name)
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+            logger.info(f"Created user from SSO: {user.id} (maya_user_id={maya_user_id_int})")
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(select(User).where(User.maya_user_id == maya_user_id_int))
+            user = result.scalar_one()
     else:
         # Update email/name if changed
         if email and user.email != email:

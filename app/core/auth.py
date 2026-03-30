@@ -7,6 +7,7 @@ to extract and verify the token from the Authorization header.
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -69,7 +70,6 @@ async def get_current_user(
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    import uuid
     try:
         parsed_id = uuid.UUID(user_id)
     except ValueError:
