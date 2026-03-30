@@ -978,20 +978,27 @@ async def _queue_google_sync(
     """Queue a sync item if the user has Google Calendar connected.
 
     No-op if user hasn't connected Google or sync isn't enabled.
+    Wrapped in try/except so sync queue failures never surface as
+    user-visible errors (the event itself is already committed).
     """
     prefs = user.preferences or {}
     if not prefs.get("google_sync_enabled", False):
         return
 
-    db.add(SyncQueueItem(
-        user_id=user.id,
-        action=action,
-        event_id=event_id,
-        external_event_id=external_event_id,
-        external_provider="google",
-        status="pending",
-    ))
-    await db.commit()
+    try:
+        db.add(SyncQueueItem(
+            user_id=user.id,
+            action=action,
+            event_id=event_id,
+            external_event_id=external_event_id,
+            external_provider="google",
+            status="pending",
+        ))
+        await db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to queue Google sync ({action}): {e}")
+        await db.rollback()
 
 
 async def _get_external_event_id(db: AsyncSession, event_id: uuid.UUID) -> str | None:

@@ -8,7 +8,7 @@ Two tasks run concurrently:
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, and_
 
@@ -35,10 +35,31 @@ async def run_sync_worker() -> None:
         return
 
     logger.info("Sync worker started.")
+    await _reset_stuck_processing_items()
     await asyncio.gather(
         _run_queue_processor(),
         _run_pull_scheduler(),
     )
+
+
+async def _reset_stuck_processing_items() -> None:
+    """On startup, reset items that were left in 'processing' by a previous crash."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    async with get_session() as db:
+        result = await db.execute(
+            select(SyncQueueItem).where(
+                and_(
+                    SyncQueueItem.status == "processing",
+                    SyncQueueItem.updated_at < cutoff,
+                )
+            )
+        )
+        stuck = result.scalars().all()
+        for item in stuck:
+            item.status = "pending"
+        if stuck:
+            await db.commit()
+            logger.info(f"Reset {len(stuck)} stuck 'processing' items to 'pending'.")
 
 
 # ---------------------------------------------------------------------------
