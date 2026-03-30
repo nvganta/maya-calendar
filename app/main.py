@@ -17,16 +17,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Start background workers on startup, clean up on shutdown."""
     from app.services.reminder_worker import run_reminder_worker
+    from app.services.sync_worker import run_sync_worker
     reminder_task = asyncio.create_task(run_reminder_worker())
+    sync_task = asyncio.create_task(run_sync_worker())
     logger.info("Calendar agent started.")
     try:
         yield
     finally:
         reminder_task.cancel()
-        try:
-            await reminder_task
-        except asyncio.CancelledError:
-            pass
+        sync_task.cancel()
+        for task in (reminder_task, sync_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         logger.info("Calendar agent shut down.")
 
 
