@@ -216,3 +216,7 @@ async def _pull_all_connected_users() -> None:
 
             except Exception as e:
                 logger.error(f"Pull sync failed for user {user.id}: {e}")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
