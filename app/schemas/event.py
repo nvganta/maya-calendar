@@ -14,6 +14,7 @@ class EventCreate(BaseModel):
     is_all_day: bool = False
     recurrence: str | None = None
     tags: list[str] | None = None
+    category: str | None = None
 
 
 class EventUpdate(BaseModel):
@@ -25,6 +26,7 @@ class EventUpdate(BaseModel):
     is_all_day: bool | None = None
     recurrence: str | None = None
     tags: list[str] | None = None
+    category: str | None = None
 
 
 class EventResponse(BaseModel):
@@ -37,10 +39,30 @@ class EventResponse(BaseModel):
     is_all_day: bool
     recurrence: str | None
     tags: list[str] | None
+    category: str | None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# --- User Settings ---
+
+
+class UserSettingsResponse(BaseModel):
+    timezone: str | None
+    working_hours_start: int
+    working_hours_end: int
+    preferences: dict | None
+
+    model_config = {"from_attributes": True}
+
+
+class UserSettingsUpdate(BaseModel):
+    timezone: str | None = None
+    working_hours_start: int | None = None
+    working_hours_end: int | None = None
+    preferences: dict | None = None
 
 
 # --- Reminders ---

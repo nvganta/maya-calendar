@@ -9,6 +9,7 @@ from app.api.maya import router as maya_router
 from app.api.events import router as events_router
 from app.api.google import router as google_router
 from app.api.sso import router as sso_router
+from app.api.user import router as user_router
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ app.include_router(maya_router)
 app.include_router(events_router, prefix="/api/events", tags=["events"])
 app.include_router(google_router, prefix="/api/google", tags=["google"])
 app.include_router(sso_router, prefix="/api/sso", tags=["sso"])
+app.include_router(user_router, prefix="/api/user", tags=["user"])
 
 
 @app.get("/health")

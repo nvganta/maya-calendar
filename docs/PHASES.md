@@ -13,27 +13,50 @@ A conversational AI calendar agent that lives inside Maya. Users talk to Maya, M
 
 - ❌ A standalone calendar app (we're a spoke agent, not a product)
 - ❌ A Calendly/Cal.com clone (booking pages are Phase 5+)
-- ❌ Full Google/Outlook sync (Phase 4+ — V1 is standalone)
+- ✅ Google Calendar sync (Phase 4 — bidirectional, mostly complete)
+- ❌ Outlook sync (future)
 - ❌ Team/org features (this is single-user first)
-- ❌ A frontend (Phase 5+ — the chat IS the interface)
+- ❌ A frontend (Phase 6 — the chat IS the interface for now)
 
 ---
 
-## Current Status (What Already Exists)
+## Current Status (Updated April 2026)
 
-- ✅ FastAPI app with health check and CORS
-- ✅ `/api/maya/provision` — user registration with HMAC verification
-- ✅ `/chat` — receives messages, routes to intent parser
-- ✅ HMAC signature verification matching Maya's signing logic
-- ✅ Database models: User, Event, Reminder
-- ✅ LLM intent parser (OpenAI or Anthropic) — classifies 7 intents
-- ✅ Calendar service with CRUD, conflict detection, fuzzy event search
-- ⚠️ No migrations generated yet
-- ⚠️ Timezone stored but not used in parsing
-- ⚠️ dateparser in requirements but not integrated
-- ⚠️ Recurrence stored but not expanded for queries
-- ⚠️ Reminders created but no delivery system
-- ⚠️ No tests
+### Phases 1–3: COMPLETE
+- ✅ FastAPI app with health check, CORS, lifespan-managed background workers
+- ✅ `/api/maya/provision` — user registration with HMAC verification (idempotent)
+- ✅ `/chat` — receives messages, routes to intent parser, returns NL response
+- ✅ HMAC-SHA256 signature verification with timestamp freshness (5 min tolerance)
+- ✅ Database: 7 models, 4 Alembic migrations, proper indexes
+- ✅ LLM intent parser (OpenAI or Anthropic) — classifies **14+ intents**
+- ✅ Calendar service (1,300+ lines) — CRUD, conflict detection, alternative suggestions
+- ✅ dateparser integrated as LLM fallback
+- ✅ Timezone-aware parsing + display (user timezone stored, all dates UTC in DB)
+- ✅ Recurring events with RRULE expansion (dateutil), skip occurrences
+- ✅ Reminder background worker (checks every 60s, pushes to Maya)
+- ✅ Daily/weekly digest with stats (meeting hours, free time, busiest days)
+- ✅ Event categories (work, personal, focus, health) with icons
+- ✅ 20+ built-in templates + custom user templates
+- ✅ User preferences (default duration, buffer, no-meeting-before, preferred times)
+- ✅ Natural language search (by title/tags, past/future, count queries)
+- ✅ Back-to-back meeting warnings
+- ✅ 1,000+ lines of tests (5 test files)
+- ✅ Conversation follow-up resolution via context tags
+
+### Phase 4: MOSTLY COMPLETE
+- ✅ Google OAuth 2.0 flow with CSRF protection (signed state tokens)
+- ✅ Token encryption at rest (Fernet)
+- ✅ Async push queue (SyncQueueItem → background worker → Google API)
+- ✅ Bidirectional pull sync with incremental syncToken
+- ✅ Connect/disconnect/status via chat commands
+- ⚠️ No tests for Google sync
+- ⚠️ Missing `google-auth-oauthlib` in installed dependencies (in requirements.txt but needs `pip install`)
+
+### Not Yet Started
+- ❌ Phase 5: Collaboration & Booking
+- ❌ Phase 6: Analytics & Frontend
+- ❌ Dockerfile / CI/CD pipeline
+- ❌ Direct CRUD endpoints for frontend (stubs only)
 
 ---
 
