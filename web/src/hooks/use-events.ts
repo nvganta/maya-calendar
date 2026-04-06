@@ -40,7 +40,7 @@ function getMockEvents(monday: Date): CalendarEvent[] {
   ];
 }
 
-const USE_MOCK = true; // flip to false when backend is running
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
 
 export function useEvents() {
   const { currentDate, viewType, selectedCategories } = useCalendar();

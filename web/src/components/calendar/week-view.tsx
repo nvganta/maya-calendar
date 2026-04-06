@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { CalendarEvent } from "@/lib/types";
 import {
   getWeekDays,
@@ -137,7 +137,11 @@ export default function WeekView({
 }
 
 function CurrentTimeIndicator() {
-  const now = new Date();
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const top = (now.getHours() + now.getMinutes() / 60) * HOUR_HEIGHT;
 
   return (

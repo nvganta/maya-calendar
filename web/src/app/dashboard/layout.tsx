@@ -1,10 +1,30 @@
 "use client";
 
-import { AuthProvider } from "@/lib/auth";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { AuthProvider, useAuth } from "@/lib/auth";
 import { CalendarProvider } from "@/lib/calendar-context";
 
-// TODO: Re-enable AuthGate before production
-// Auth bypass for local preview — remove this and restore AuthGate
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login");
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return <>{children}</>;
+}
 
 export default function DashboardLayout({
   children,
@@ -13,9 +33,11 @@ export default function DashboardLayout({
 }) {
   return (
     <AuthProvider>
-      <CalendarProvider>
-        {children}
-      </CalendarProvider>
+      <AuthGate>
+        <CalendarProvider>
+          {children}
+        </CalendarProvider>
+      </AuthGate>
     </AuthProvider>
   );
 }

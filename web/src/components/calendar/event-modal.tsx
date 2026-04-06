@@ -76,11 +76,17 @@ export default function EventModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (!isAllDay && end <= start) {
+      alert("End time must be after start time.");
+      return;
+    }
     onSave({
       title: title.trim(),
       description: description.trim(),
-      start_time: new Date(startTime).toISOString(),
-      end_time: new Date(endTime).toISOString(),
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
       location: location.trim(),
       category,
       is_all_day: isAllDay,

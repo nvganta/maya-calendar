@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import type { UserSettings } from "@/lib/types";
 import { getUserSettings, updateUserSettings } from "@/lib/api";
 
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
+
 interface SettingsModalProps {
   onClose: () => void;
 }
@@ -38,6 +40,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [workEnd, setWorkEnd] = useState(18);
 
   useEffect(() => {
+    if (USE_MOCK) {
+      setSettings({ timezone: null, working_hours_start: 9, working_hours_end: 18, preferences: null });
+      setLoading(false);
+      return;
+    }
     getUserSettings()
       .then((s) => {
         setSettings(s);
@@ -58,15 +65,21 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   }, [onClose]);
 
   const handleSave = async () => {
+    if (workEnd <= workStart) {
+      setError("End of working hours must be after start.");
+      return;
+    }
     setSaving(true);
     setError("");
     setSuccess(false);
     try {
-      await updateUserSettings({
-        timezone: timezone || null,
-        working_hours_start: workStart,
-        working_hours_end: workEnd,
-      });
+      if (!USE_MOCK) {
+        await updateUserSettings({
+          timezone: timezone || null,
+          working_hours_start: workStart,
+          working_hours_end: workEnd,
+        });
+      }
       setSuccess(true);
       setTimeout(() => onClose(), 800);
     } catch (err) {

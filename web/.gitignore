@@ -5,6 +5,9 @@ node_modules/
 .next/
 out/
 
+# env
+.env.local
+
 # misc
 .DS_Store
 *.tsbuildinfo
