@@ -101,6 +101,16 @@ async def list_events(
     db: AsyncSession = Depends(get_db),
 ):
     """List events within a date range, including expanded recurring occurrences."""
+    import uuid as uuid_mod
+    from dateutil.rrule import rrulestr
+    from app.models.recurring_exception import RecurringEventException
+
+    # Ensure start/end are timezone-aware to avoid aware-vs-naive comparison errors
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
     filters = [
         Event.user_id == user.id,
         Event.start_time < end,
@@ -117,32 +127,49 @@ async def list_events(
     events = list(result.scalars().all())
 
     # Recurring events: fetch all for this user and expand occurrences into range
+    recurring_filters = [
+        Event.user_id == user.id,
+        Event.recurrence.isnot(None),
+    ]
+    if category:
+        recurring_filters.append(Event.category == category)
+
     recurring_result = await db.execute(
-        select(Event).where(
-            Event.user_id == user.id,
-            Event.recurrence.isnot(None),
-        )
+        select(Event).where(*recurring_filters)
     )
-    recurring_events = recurring_result.scalars().all()
+    recurring_events = list(recurring_result.scalars().all())
 
     if recurring_events:
-        from dateutil.rrule import rrulestr
+        # Load cancelled occurrences so we can skip them
+        recurring_ids = [e.id for e in recurring_events]
+        exc_result = await db.execute(
+            select(RecurringEventException).where(
+                RecurringEventException.event_id.in_(recurring_ids),
+                RecurringEventException.is_cancelled.is_(True),
+            )
+        )
+        cancelled_dates: dict[uuid.UUID, set] = {}
+        for exc in exc_result.scalars().all():
+            cancelled_dates.setdefault(exc.event_id, set()).add(exc.exception_date)
 
         for event in recurring_events:
+            event_cancelled = cancelled_dates.get(event.id, set())
             try:
                 rule = rrulestr(event.recurrence, dtstart=event.start_time)
                 duration = event.end_time - event.start_time
                 occurrences = rule.between(start, end, inc=True)
                 for occ_start in occurrences:
-                    # Skip the original occurrence (already in non-recurring results
-                    # if it falls in range)
+                    # Skip cancelled occurrences
+                    if occ_start.date() in event_cancelled:
+                        continue
+                    # Original occurrence: use the real DB row
                     if occ_start == event.start_time:
                         if event not in events:
                             events.append(event)
                         continue
-                    # Create a virtual event for this occurrence
+                    # Virtual occurrence: deterministic ID so React gets stable keys
                     virtual = Event(
-                        id=event.id,
+                        id=uuid_mod.uuid5(event.id, occ_start.isoformat()),
                         user_id=event.user_id,
                         title=event.title,
                         description=event.description,
