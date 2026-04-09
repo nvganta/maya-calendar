@@ -23,7 +23,7 @@ from app.schemas.event import (
     ReminderCreate,
     ReminderResponse,
 )
-from app.services.calendar import _queue_google_sync
+from app.services.calendar import queue_google_sync
 
 router = APIRouter()
 
@@ -217,7 +217,7 @@ async def create_event(
     db.add(event)
     await db.commit()
     await db.refresh(event)
-    await _queue_google_sync(db, user, "create", event_id=event.id)
+    await queue_google_sync(db, user, "create", event_id=event.id)
     return event
 
 
@@ -259,7 +259,7 @@ async def update_event(
     event.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(event)
-    await _queue_google_sync(db, user, "update", event_id=event.id)
+    await queue_google_sync(db, user, "update", event_id=event.id)
     return event
 
 
@@ -290,4 +290,4 @@ async def delete_event(
     await db.commit()
 
     if ext_id:
-        await _queue_google_sync(db, user, "delete", external_event_id=ext_id)
+        await queue_google_sync(db, user, "delete", external_event_id=ext_id)
