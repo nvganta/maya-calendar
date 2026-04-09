@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.user import User
@@ -44,7 +45,7 @@ async def _get_user_by_id(user_id: str, db: AsyncSession) -> User:
 
 
 @router.get("/auth-url")
-async def google_auth_url(user_id: str = Query(..., description="Internal user UUID")):
+async def google_auth_url(user: User = Depends(get_current_user)):
     """Generate the Google OAuth consent screen URL.
 
     The user_id is embedded in a signed state token (with nonce + timestamp)
@@ -53,7 +54,7 @@ async def google_auth_url(user_id: str = Query(..., description="Internal user U
     if not _google_configured():
         raise HTTPException(status_code=503, detail="Google Calendar sync is not configured")
 
-    url = google_auth.get_auth_url(user_id=user_id)
+    url = google_auth.get_auth_url(user_id=str(user.id))
     return {"auth_url": url}
 
 
@@ -96,24 +97,30 @@ async def google_callback(
 
 @router.post("/disconnect")
 async def google_disconnect(
-    user_id: str = Query(..., description="Internal user UUID"),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke Google token and disconnect the account."""
-    user = await _get_user_by_id(user_id, db)
     disconnected = await google_auth.disconnect(user, db)
 
     if not disconnected:
         raise HTTPException(status_code=404, detail="Google account not connected")
+
+    # Clear sync preferences so queue_google_sync stops queuing items
+    prefs = (user.preferences or {}).copy()
+    prefs.pop("google_sync_enabled", None)
+    prefs.pop("google_sync_token", None)
+    prefs.pop("google_calendar_id", None)
+    user.preferences = prefs
+    await db.commit()
 
     return {"status": "disconnected", "message": "Google Calendar disconnected."}
 
 
 @router.get("/status")
 async def google_status(
-    user_id: str = Query(..., description="Internal user UUID"),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Check if the user has Google Calendar connected."""
-    user = await _get_user_by_id(user_id, db)
     return await google_auth.get_connection_status(user, db)

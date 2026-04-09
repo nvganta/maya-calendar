@@ -175,7 +175,7 @@ async def _create_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
             await db.commit()
 
     # Queue Google sync if enabled
-    await _queue_google_sync(db, user, "create", event_id=event.id)
+    await queue_google_sync(db, user, "create", event_id=event.id)
 
     # Format response
     time_str = _format_time_range(intent.start_time, end_time, tz)
@@ -439,7 +439,7 @@ async def _update_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
         return f"Found **{event.title}** but I'm not sure what to change. What would you like to update?"
 
     await db.commit()
-    await _queue_google_sync(db, user, "update", event_id=event.id)
+    await queue_google_sync(db, user, "update", event_id=event.id)
     response = f"Updated **{event.title}** — {', '.join(changes)}."
     response += _event_context_tag(event.id, event.title, event.start_time, tz)
     return response
@@ -473,7 +473,7 @@ async def _delete_event(intent: ParsedIntent, user: User, db: AsyncSession) -> s
 
     # Queue Google delete if we had a mapping
     if ext_id:
-        await _queue_google_sync(db, user, "delete", external_event_id=ext_id)
+        await queue_google_sync(db, user, "delete", external_event_id=ext_id)
 
     if is_recurring:
         return f"Done — cancelled **{title}** and all its future occurrences."
@@ -1082,7 +1082,7 @@ async def _check_back_to_back(
 # Google sync hooks
 # ---------------------------------------------------------------------------
 
-async def _queue_google_sync(
+async def queue_google_sync(
     db: AsyncSession, user: User, action: str,
     event_id: uuid.UUID | None = None,
     external_event_id: str | None = None,
