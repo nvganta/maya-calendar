@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models.event import Event
+from app.models.external_event_mapping import ExternalEventMapping
 from app.models.reminder import Reminder
 from app.models.user import User
 from app.schemas.event import (
@@ -22,6 +23,7 @@ from app.schemas.event import (
     ReminderCreate,
     ReminderResponse,
 )
+from app.services.calendar import _queue_google_sync
 
 router = APIRouter()
 
@@ -215,6 +217,7 @@ async def create_event(
     db.add(event)
     await db.commit()
     await db.refresh(event)
+    await _queue_google_sync(db, user, "create", event_id=event.id)
     return event
 
 
@@ -256,6 +259,7 @@ async def update_event(
     event.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(event)
+    await _queue_google_sync(db, user, "update", event_id=event.id)
     return event
 
 
@@ -273,5 +277,17 @@ async def delete_event(
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
+    # Capture external ID before deleting (mapping cascades with event)
+    ext_result = await db.execute(
+        select(ExternalEventMapping.external_event_id).where(and_(
+            ExternalEventMapping.internal_event_id == event_id,
+            ExternalEventMapping.external_provider == "google",
+        ))
+    )
+    ext_id = ext_result.scalar_one_or_none()
+
     await db.delete(event)
     await db.commit()
+
+    if ext_id:
+        await _queue_google_sync(db, user, "delete", external_event_id=ext_id)

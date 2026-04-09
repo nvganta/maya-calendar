@@ -212,21 +212,24 @@ Validates a Maya SSO token and issues a local JWT for frontend sessions.
 
 ---
 
-## Event CRUD Endpoints (Future — for frontend)
+## Event CRUD Endpoints (Frontend)
 
-The following endpoints exist as placeholders in `app/api/events.py` for when a frontend is built. They are **not yet implemented**.
+All endpoints require JWT authentication via the SSO flow (`Authorization: Bearer <token>`).
 
 ```
-GET    /api/events          # List events for authenticated user
-POST   /api/events          # Create event
-GET    /api/events/{id}     # Get single event
-PATCH  /api/events/{id}     # Update event
-DELETE /api/events/{id}     # Delete event
-GET    /api/reminders       # List reminders
-POST   /api/reminders       # Create reminder
+GET    /api/events                      # List events in date range (with RRULE expansion)
+POST   /api/events                      # Create event
+GET    /api/events/{id}                 # Get single event
+PATCH  /api/events/{id}                 # Update event (partial)
+DELETE /api/events/{id}                 # Delete event
+GET    /api/events/reminders/pending    # List unsent reminders
+POST   /api/events/reminders            # Create reminder
+DELETE /api/events/reminders/{id}       # Delete reminder
+GET    /api/user                        # Get user settings
+PATCH  /api/user                        # Update user settings (timezone, working hours, preferences)
 ```
 
-These will require JWT authentication (from SSO flow) when implemented.
+Events with `recurrence` are expanded via RRULE into virtual occurrences within the queried date range. Virtual occurrences receive deterministic `uuid5` IDs. Cancelled occurrences (via `RecurringEventException`) are excluded. All mutations queue Google Calendar sync when the user has Google connected.
 
 ---
 

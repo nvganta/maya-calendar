@@ -57,11 +57,14 @@ async def _process_due_reminders() -> None:
         logger.info(f"Firing {len(rows)} due reminder(s).")
 
         for reminder, user in rows:
-            delivered = await _deliver_reminder(reminder, user, settings)
-            if delivered:
-                reminder.is_sent = True
-
-        await db.commit()
+            try:
+                delivered = await _deliver_reminder(reminder, user, settings)
+                if delivered:
+                    reminder.is_sent = True
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to process reminder {reminder.id}: {e}")
+                await db.rollback()
 
 
 async def _deliver_reminder(reminder: Reminder, user: User, settings) -> bool:
@@ -107,7 +110,7 @@ async def _push_to_maya(reminder: Reminder, user: User, settings) -> None:
     ).hexdigest()
 
     async with httpx.AsyncClient(timeout=10.0) as client:
-        await client.post(
+        resp = await client.post(
             f"{settings.MAYA_API_URL}/api/agents/notify",
             content=body.encode(),
             headers={
@@ -117,3 +120,4 @@ async def _push_to_maya(reminder: Reminder, user: User, settings) -> None:
                 "X-Maya-Timestamp": timestamp,
             },
         )
+        resp.raise_for_status()

@@ -28,7 +28,13 @@ async def update_settings(
     """Update user settings."""
     updates = body.model_dump(exclude_unset=True)
     for field, value in updates.items():
-        setattr(user, field, value)
+        if field == "preferences" and value is not None:
+            # Merge keys instead of replacing the entire JSONB blob
+            existing = (user.preferences or {}).copy()
+            existing.update(value)
+            user.preferences = existing
+        else:
+            setattr(user, field, value)
 
     user.updated_at = datetime.now(timezone.utc)
     await db.commit()

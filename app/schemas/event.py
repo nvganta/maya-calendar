@@ -1,6 +1,13 @@
 import uuid
-from datetime import datetime
-from pydantic import BaseModel
+from datetime import datetime, timezone
+from pydantic import BaseModel, field_validator
+
+
+def _ensure_tz_aware(v: datetime) -> datetime:
+    """Coerce naive datetimes to UTC. asyncpg requires tz-aware for TIMESTAMPTZ."""
+    if v.tzinfo is None:
+        return v.replace(tzinfo=timezone.utc)
+    return v
 
 
 # --- Events ---
@@ -16,6 +23,11 @@ class EventCreate(BaseModel):
     tags: list[str] | None = None
     category: str | None = None
 
+    @field_validator("start_time", "end_time", mode="after")
+    @classmethod
+    def tz_aware(cls, v: datetime) -> datetime:
+        return _ensure_tz_aware(v)
+
 
 class EventUpdate(BaseModel):
     title: str | None = None
@@ -27,6 +39,11 @@ class EventUpdate(BaseModel):
     recurrence: str | None = None
     tags: list[str] | None = None
     category: str | None = None
+
+    @field_validator("start_time", "end_time", mode="after")
+    @classmethod
+    def tz_aware(cls, v: datetime | None) -> datetime | None:
+        return _ensure_tz_aware(v) if v is not None else None
 
 
 class EventResponse(BaseModel):
@@ -71,6 +88,11 @@ class ReminderCreate(BaseModel):
     message: str
     remind_at: datetime
     event_id: uuid.UUID | None = None
+
+    @field_validator("remind_at", mode="after")
+    @classmethod
+    def tz_aware(cls, v: datetime) -> datetime:
+        return _ensure_tz_aware(v)
 
 
 class ReminderResponse(BaseModel):
