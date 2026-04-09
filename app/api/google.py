@@ -106,6 +106,14 @@ async def google_disconnect(
     if not disconnected:
         raise HTTPException(status_code=404, detail="Google account not connected")
 
+    # Clear sync preferences so queue_google_sync stops queuing items
+    prefs = (user.preferences or {}).copy()
+    prefs.pop("google_sync_enabled", None)
+    prefs.pop("google_sync_token", None)
+    prefs.pop("google_calendar_id", None)
+    user.preferences = prefs
+    await db.commit()
+
     return {"status": "disconnected", "message": "Google Calendar disconnected."}
 
 

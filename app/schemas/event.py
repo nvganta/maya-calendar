@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 def _ensure_tz_aware(v: datetime) -> datetime:
@@ -28,6 +28,12 @@ class EventCreate(BaseModel):
     def tz_aware(cls, v: datetime) -> datetime:
         return _ensure_tz_aware(v)
 
+    @model_validator(mode="after")
+    def end_after_start(self):
+        if not self.is_all_day and self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
 
 class EventUpdate(BaseModel):
     title: str | None = None
@@ -44,6 +50,13 @@ class EventUpdate(BaseModel):
     @classmethod
     def tz_aware(cls, v: datetime | None) -> datetime | None:
         return _ensure_tz_aware(v) if v is not None else None
+
+    @model_validator(mode="after")
+    def end_after_start(self):
+        if self.start_time is not None and self.end_time is not None:
+            if self.end_time <= self.start_time:
+                raise ValueError("end_time must be after start_time")
+        return self
 
 
 class EventResponse(BaseModel):
